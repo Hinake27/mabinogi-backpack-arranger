@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>新瑪奇背包排列工具</title>
+  <script src="vendor/ort.wasm.min.js"></script>
+  <style>
+    :root{
+      color-scheme:dark;
+      --bg:#071019;--panel:#0d1924;--panel2:#111f2c;--line:#263746;
+      --text:#e7f0f4;--muted:#91a5b3;--cyan:#35d4c7;--amber:#ffb84d;
+      --red:#ff6b78;--blue:#5caeff;--shadow:0 20px 55px rgba(0,0,0,.34);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI","Noto Sans TC",sans-serif;overflow:hidden}
+    button,input{font:inherit}
+    button{
+      min-height:38px;padding:0 14px;border:1px solid var(--line);border-radius:9px;
+      background:#162534;color:var(--text);cursor:pointer;transition:.16s ease;
+    }
+    button:hover:not(:disabled){border-color:#5d7a8c;transform:translateY(-1px)}
+    button:disabled{opacity:.38;cursor:not-allowed}
+    .primary{background:var(--cyan);border-color:var(--cyan);color:#03211f;font-weight:750}
+    .danger{color:#ffd1d5}
+    input[type=file]{display:none}
+    input[type=number],input[type=range]{
+      width:100%;height:38px;border:1px solid var(--line);border-radius:8px;
+      background:#09151f;color:var(--text);padding:0 10px;outline:none;
+    }
+    input:focus{border-color:var(--cyan)}
+    input[type=range]{padding:0;accent-color:var(--cyan)}
+    .app{height:100vh;display:grid;grid-template-rows:70px minmax(0,1fr) 48px}
+    header,footer{display:flex;align-items:center;justify-content:space-between;padding:0 18px;background:#08121b}
+    header{border-bottom:1px solid var(--line)}
+    footer{border-top:1px solid var(--line)}
+    h1{font-size:20px;line-height:1.2;margin:0 0 5px}
+    header p{font-size:12px;color:var(--muted);margin:0}
+    .header-actions,.row-actions,.nav{display:flex;gap:8px;align-items:center}
+    .status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+    .dot{width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 4px rgba(255,184,77,.1)}
+    .dot.ready{background:var(--cyan);box-shadow:0 0 0 4px rgba(53,212,199,.1)}
+    main{min-height:0;display:grid;grid-template-columns:minmax(430px,1.15fr) 310px minmax(390px,1fr)}
+    .pane{min-width:0;min-height:0;background:var(--panel);display:flex;flex-direction:column}
+    .pane+.pane{border-left:1px solid var(--line)}
+    .pane-head{height:52px;flex:0 0 52px;padding:0 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
+    .pane-head strong{font-size:14px}.pane-head small{color:var(--muted);font-size:11px}
+    .stage{
+      position:relative;flex:1;min-height:0;overflow:auto;display:grid;place-items:center;padding:26px;
+      background-color:#09131c;
+      background-image:linear-gradient(45deg,#0d1a24 25%,transparent 25%),linear-gradient(-45deg,#0d1a24 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#0d1a24 75%),linear-gradient(-45deg,transparent 75%,#0d1a24 75%);
+      background-size:22px 22px;background-position:0 0,0 11px,11px -11px,-11px 0;
+    }
+    canvas{display:block;max-width:none;box-shadow:var(--shadow);touch-action:none}
+    #sourceCanvas{cursor:crosshair}
+    .empty{max-width:330px;text-align:center;color:var(--muted);line-height:1.7}
+    .empty svg{display:block;margin:0 auto 16px;color:#537082}
+    .empty strong{display:block;color:var(--text);font-size:18px;margin-bottom:6px}
+    .side-scroll{overflow:auto;padding:14px;display:grid;gap:16px;align-content:start}
+    .section{display:grid;gap:10px}
+    .section-title{display:flex;align-items:center;justify-content:space-between}
+    .section-title strong{font-size:13px}.section-title span{font-size:11px;color:var(--muted)}
+    .grid-form{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+    label{display:grid;gap:6px;color:var(--muted);font-size:11px}
+    label b{color:var(--text);font-weight:600}
+    .full{grid-column:1/-1}
+    .info{
+      border:1px solid var(--line);border-radius:10px;background:#09151f;padding:11px 12px;
+      color:var(--muted);font-size:12px;line-height:1.65;
+    }
+    .info b{color:var(--text)}
+    .item-list{display:grid;gap:6px;max-height:250px;overflow:auto}
+    .item-row{
+      display:grid;grid-template-columns:24px 1fr auto;align-items:center;gap:8px;
+      padding:8px 9px;border:1px solid var(--line);border-radius:8px;background:#0a151f;cursor:pointer;
+    }
+    .item-row.active{border-color:var(--amber);background:rgba(255,184,77,.09)}
+    .item-row i{width:15px;height:15px;border-radius:3px;background:var(--item)}
+    .item-row span{font-size:12px}.item-row small{font-size:11px;color:var(--muted)}
+    .selection{display:grid;gap:10px}
+    .selection[hidden]{display:none}
+    .result-wrap{flex:1;min-height:0;overflow:auto;padding:26px;display:grid;place-items:center;background:#08121b}
+    .result-shell{min-width:320px;max-width:100%;display:grid;gap:14px}
+    .result-summary{display:flex;justify-content:space-between;gap:15px;color:var(--muted);font-size:12px}
+    .result-summary b{color:var(--text)}
+    #resultCanvas{background:#0a151f;border:1px solid var(--line);box-shadow:var(--shadow);cursor:pointer}
+    .selected-detail{min-height:72px;border-top:1px solid var(--line);padding:13px 15px;background:#0b1620;color:var(--muted);font-size:12px;line-height:1.7}
+    .selected-detail b{color:var(--text)}
+    .footer-stats{display:flex;gap:20px;color:var(--muted);font-size:12px}.footer-stats b{color:var(--text);margin-left:5px}
+    .hidden{display:none!important}
+    .spinner{width:15px;height:15px;border:2px solid rgba(3,33,31,.3);border-top-color:#03211f;border-radius:50%;animation:spin .7s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @media(max-width:1100px){
+      body{overflow:auto}.app{height:auto;min-height:100vh;grid-template-rows:auto auto auto}
+      header{min-height:88px;gap:14px;flex-wrap:wrap;padding:14px 16px}
+      main{grid-template-columns:1fr}.pane{min-height:600px}.pane+.pane{border-left:0;border-top:1px solid var(--line)}
+      main .pane:nth-child(2){min-height:auto}.side-scroll{grid-template-columns:repeat(2,minmax(0,1fr))}.result-wrap{min-height:520px}
+      footer{min-height:58px;gap:12px;flex-wrap:wrap;padding:10px 16px}
+    }
+    @media(max-width:650px){
+      .header-actions{width:100%;display:grid;grid-template-columns:1fr 1fr}
+      .side-scroll{grid-template-columns:1fr}.pane{min-height:520px}.stage,.result-wrap{padding:14px}
+      .footer-stats{gap:9px;flex-wrap:wrap}
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div>
+      <h1>新瑪奇背包排列工具</h1>
+      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.22-r4</p>
+    </div>
+    <div class="header-actions">
+      <div class="status"><span class="dot" id="modelDot"></span><span id="modelStatus">模型尚未載入</span></div>
+      <button id="openBtn">選擇背包圖片</button>
+      <input id="fileInput" type="file" accept="image/*">
+      <button id="detectBtn" class="primary" disabled>辨識道具</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="pane">
+      <div class="pane-head"><strong>背包圖片</strong><small id="imageInfo">尚未選擇圖片</small></div>
+      <div class="stage" id="sourceStage">
+        <div class="empty" id="sourceEmpty">
+          <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+          <strong>上傳一張完整背包截圖</strong>
+          建議只保留背包格子區域。載入後，模型會自動框出每件道具。
+        </div>
+        <canvas id="sourceCanvas" class="hidden"></canvas>
+      </div>
+    </section>
+
+    <aside class="pane">
+      <div class="pane-head"><strong>辨識與修正</strong><small id="detectSummary">0 件道具</small></div>
+      <div class="side-scroll">
+        <div class="section">
+          <div class="section-title"><strong>模型設定</strong><span id="confidenceText">信心 30%</span></div>
+          <label>辨識信心門檻<input id="confidence" type="range" min="10" max="90" value="30"></label>
+          <div class="info">數值越低越不容易漏掉道具，但可能增加錯框。一般建議從 <b>30%</b> 開始。</div>
+        </div>
+
+        <div class="section">
+          <div class="section-title"><strong>背包格線</strong><button id="inferGridBtn" disabled>重新推測</button></div>
+          <div class="grid-form">
+            <label>欄數<input id="cols" type="number" min="1" max="80" value="10"></label>
+            <label>列數<input id="rows" type="number" min="1" max="80" value="8"></label>
+            <label>格寬<input id="cellW" type="number" min="4" max="200" step=".1" value="32"></label>
+            <label>格高<input id="cellH" type="number" min="4" max="200" step=".1" value="32"></label>
+            <label>起點 X<input id="originX" type="number" min="0" step=".1" value="0"></label>
+            <label>起點 Y<input id="originY" type="number" min="0" step=".1" value="0"></label>
+          </div>
+          <div class="info">青色線是推測格線。若道具格數不對，只需微調格寬、格高或起點。</div>
+        </div>
+
+        <div class="section selection" id="selectionPanel" hidden>
+          <div class="section-title"><strong>選取道具</strong><span id="selectedConfidence"></span></div>
+          <div class="grid-form">
+            <label>占用寬度<input id="itemW" type="number" min="1" max="20" value="1"></label>
+            <label>占用高度<input id="itemH" type="number" min="1" max="20" value="1"></label>
+          </div>
+          <div class="row-actions">
+            <button id="snapBtn">貼齊格線</button>
+            <button id="deleteBtn" class="danger">刪除錯框</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title"><strong>道具清單</strong><span>點擊可查看</span></div>
+          <div class="item-list" id="itemList"><div class="info">辨識後會顯示道具。</div></div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="pane">
+      <div class="pane-head">
+        <strong>建議排列 <small id="arrangeMode">大型優先</small></strong>
+        <div class="row-actions"><button id="arrangeBtn" class="primary" disabled>換一種排列</button></div>
+      </div>
+      <div class="result-wrap">
+        <div class="result-shell">
+          <div class="result-summary">
+            <span>背包 <b id="bagSize">10 × 8</b></span>
+            <span>使用 <b id="usedCells">0 / 80</b> 格</span>
+            <span>未放入 <b id="overflowCount">0</b> 件</span>
+          </div>
+          <canvas id="resultCanvas" width="420" height="336"></canvas>
+        </div>
+      </div>
+      <div class="selected-detail" id="selectedDetail">點選左側原圖或排列圖中的道具，可查看原位置與建議位置。</div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-stats">
+      <span>模型框<b id="boxCount">0</b></span>
+      <span>1×1 道具<b id="oneCellCount">0</b></span>
+      <span>大型道具<b id="largeCount">0</b></span>
+    </div>
+    <div class="status">拖曳原圖空白處可補框；拖曳既有框可移動，選取後可修改占用格數。</div>
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const source = $("sourceCanvas"), sctx = source.getContext("2d");
+  const result = $("resultCanvas"), rctx = result.getContext("2d");
+  const image = new Image();
+  const MODEL_SIZE = 640;
+  const MODEL_URL = "models/mabinogi_items.onnx";
+  const palette = ["#35d4c7","#ffb84d","#5caeff","#ff7c92","#a98cff","#7ee081","#e8d35f","#f58e5b"];
+  const state = {
+    session:null,file:null,boxes:[],selected:-1,layout:[],overflow:[],
+    scale:1,action:null,start:null,original:null,arrangeStrategy:0,
+    grid:{cols:10,rows:8,cellW:32,cellH:32,originX:0,originY:0}
+  };
+  const arrangeStrategies = [
+    {name:"大型優先",sort:(a,b)=>(b.gridW*b.gridH-a.gridW*a.gridH)||Math.max(b.gridW,b.gridH)-Math.max(a.gridW,a.gridH),scan:"row"},
+    {name:"高物品優先",sort:(a,b)=>(b.gridH-a.gridH)||(b.gridW-a.gridW),scan:"row"},
+    {name:"寬物品優先",sort:(a,b)=>(b.gridW-a.gridW)||(b.gridH-a.gridH),scan:"column"},
+    {name:"小型補縫",sort:(a,b)=>(a.gridW*a.gridH-b.gridW*b.gridH)||(b.gridW-a.gridW),scan:"row"},
+    {name:"保持原順序",sort:(a,b)=>state.boxes.indexOf(a)-state.boxes.indexOf(b),scan:"row"}
+  ];
+
+  // ONNX Runtime 的動態 import 必須使用完整 URL；"vendor/" 會被瀏覽器
+  // 當成套件名稱，造成 Failed to resolve module specifier。
+  ort.env.wasm.wasmPaths = new URL("vendor/", window.location.href).href;
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.simd = true;
+
+  $("openBtn").onclick = () => $("fileInput").click();
+  $("fileInput").onchange = e => e.target.files[0] && loadImage(e.target.files[0]);
+  $("detectBtn").onclick = detect;
+  $("arrangeBtn").onclick = nextArrangement;
+  $("inferGridBtn").onclick = () => { inferGrid(); syncGridInputs(); updateFromGrid(); };
+  $("confidence").oninput = () => $("confidenceText").textContent = `信心 ${$("confidence").value}%`;
+  $("deleteBtn").onclick = deleteSelected;
+  $("snapBtn").onclick = snapSelected;
+  $("itemW").onchange = applySelectedSize;
+  $("itemH").onchange = applySelectedSize;
+  ["cols","rows","cellW","cellH","originX","originY"].forEach(id => {
+    $(id).onchange = () => { readGridInputs(); updateFromGrid(); };
+  });
+  window.addEventListener("resize", fitSource);
+
+  async function ensureModel(){
+    if(state.session) return state.session;
+    $("modelStatus").textContent = "正在載入模型…";
+    try{
+      state.session = await ort.InferenceSession.create(MODEL_URL, {
+        executionProviders:["wasm"], graphOptimizationLevel:"all"
+      });
+      $("modelDot").classList.add("ready");
+      $("modelStatus").textContent = "模型已就緒";
+      return state.session;
+    }catch(error){
+      $("modelStatus").textContent = "模型載入失敗";
+      $("modelStatus").title = error.message;
+      console.error("ONNX model load failed", error);
+      throw new Error(`無法載入 ONNX 模型：${error.message}`);
+    }
+  }
+
+  function loadImage(file){
+    const url = URL.createObjectURL(file);
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      state.file=file;state.boxes=[];state.layout=[];state.overflow=[];state.selected=-1;
+      source.width=image.naturalWidth;source.height=image.naturalHeight;
+      $("sourceCanvas").classList.remove("hidden");$("sourceEmpty").classList.add("hidden");
+      $("imageInfo").textContent=`${file.name} · ${image.naturalWidth}×${image.naturalHeight}`;
+      $("detectBtn").disabled=false;$("inferGridBtn").disabled=true;$("arrangeBtn").disabled=true;
+      fitSource();renderSource();renderResult();updateUI();
+    };
+    image.src=url;
+  }
+
+  function fitSource(){
+    if(!image.naturalWidth)return;
+    const stage=$("sourceStage");
+    const maxW=Math.max(220,stage.clientWidth-52),maxH=Math.max(220,stage.clientHeight-52);
+    state.scale=Math.min(2.5,maxW/image.naturalWidth,maxH/image.naturalHeight);
+    source.style.width=Math.round(image.naturalWidth*state.scale)+"px";
+    source.style.height=Math.round(image.naturalHeight*state.scale)+"px";
+  }
+
+  async function detect(){
+    if(!image.naturalWidth)return;
+    const button=$("detectBtn"),old=button.textContent;
+    button.disabled=true;button.innerHTML='<span class="spinner"></span> 辨識中';
+    try{
+      const session=await ensureModel();
+      const {tensor,ratio,padX,padY}=prepareTensor();
+      const feeds={};feeds[session.inputNames[0]]=tensor;
+      const outputs=await session.run(feeds);
+      const output=outputs[session.outputNames[0]];
+      state.boxes=decodeOutput(output,ratio,padX,padY,+$("confidence").value/100);
+      state.selected=state.boxes.length?0:-1;
+      inferGrid();syncGridInputs();updateFromGrid();
+      $("inferGridBtn").disabled=!state.boxes.length;
+      $("arrangeBtn").disabled=!state.boxes.length;
+    }catch(error){
+      alert(error.message);
+    }finally{
+      button.disabled=false;button.textContent=old;
+    }
+  }
+
+  function prepareTensor(){
+    const temp=document.createElement("canvas");temp.width=MODEL_SIZE;temp.height=MODEL_SIZE;
+    const ctx=temp.getContext("2d",{willReadFrequently:true});
+    const ratio=Math.min(MODEL_SIZE/image.naturalWidth,MODEL_SIZE/image.naturalHeight);
+    const drawW=Math.round(image.naturalWidth*ratio),drawH=Math.round(image.naturalHeight*ratio);
+    const padX=(MODEL_SIZE-drawW)/2,padY=(MODEL_SIZE-drawH)/2;
+    ctx.fillStyle="#727272";ctx.fillRect(0,0,MODEL_SIZE,MODEL_SIZE);
+    ctx.drawImage(image,padX,padY,drawW,drawH);
+    const pixels=ctx.getImageData(0,0,MODEL_SIZE,MODEL_SIZE).data;
+    const data=new Float32Array(3*MODEL_SIZE*MODEL_SIZE);
+    const plane=MODEL_SIZE*MODEL_SIZE;
+    for(let i=0;i<plane;i++){
+      data[i]=pixels[i*4]/255;
+      data[plane+i]=pixels[i*4+1]/255;
+      data[plane*2+i]=pixels[i*4+2]/255;
+    }
+    return{tensor:new ort.Tensor("float32",data,[1,3,MODEL_SIZE,MODEL_SIZE]),ratio,padX,padY};
+  }
+
+  function decodeOutput(output,ratio,padX,padY,threshold){
+    const data=output.data,dims=output.dims;
+    const count=dims[2]||8400,channels=dims[1]||5,candidates=[];
+    for(let i=0;i<count;i++){
+      const confidence=data[4*count+i];
+      if(confidence<threshold)continue;
+      const cx=data[i],cy=data[count+i],w=data[2*count+i],h=data[3*count+i];
+      const x=Math.max(0,(cx-w/2-padX)/ratio),y=Math.max(0,(cy-h/2-padY)/ratio);
+      const x2=Math.min(image.naturalWidth,(cx+w/2-padX)/ratio);
+      const y2=Math.min(image.naturalHeight,(cy+h/2-padY)/ratio);
+      if(x2-x>3&&y2-y>3)candidates.push({x,y,w:x2-x,h:y2-y,confidence,manual:false});
+    }
+    candidates.sort((a,b)=>b.confidence-a.confidence);
+    const kept=[];
+    for(const box of candidates)if(kept.every(other=>iou(box,other)<.5))kept.push(box);
+    return kept.sort((a,b)=>a.y-b.y||a.x-b.x).map((b,i)=>({...b,id:crypto.randomUUID?.()||`${Date.now()}-${i}`}));
+  }
+
+  function iou(a,b){
+    const x1=Math.max(a.x,b.x),y1=Math.max(a.y,b.y),x2=Math.min(a.x+a.w,b.x+b.w),y2=Math.min(a.y+a.h,b.y+b.h);
+    const intersection=Math.max(0,x2-x1)*Math.max(0,y2-y1);
+    return intersection/(a.w*a.h+b.w*b.h-intersection||1);
+  }
+
+  function inferGrid(){
+    if(!state.boxes.length)return;
+    const widths=state.boxes.map(b=>b.w),heights=state.boxes.map(b=>b.h);
+    state.grid.cellW=estimateCell(widths,image.naturalWidth);
+    state.grid.cellH=estimateCell(heights,image.naturalHeight);
+    state.grid.originX=estimatePhase(state.boxes.flatMap(b=>[b.x,b.x+b.w]),state.grid.cellW);
+    state.grid.originY=estimatePhase(state.boxes.flatMap(b=>[b.y,b.y+b.h]),state.grid.cellH);
+    state.grid.cols=Math.max(1,Math.round((image.naturalWidth-state.grid.originX)/state.grid.cellW));
+    state.grid.rows=Math.max(1,Math.round((image.naturalHeight-state.grid.originY)/state.grid.cellH));
+    if(state.grid.cols>60)state.grid.cols=Math.max(1,Math.round(image.naturalWidth/state.grid.cellW));
+    if(state.grid.rows>60)state.grid.rows=Math.max(1,Math.round(image.naturalHeight/state.grid.cellH));
+  }
+
+  function estimateCell(values,imageSize){
+    const filtered=values.filter(v=>v>=8&&v<=imageSize*.9);
+    if(!filtered.length)return 32;
+    let best={cell:Math.min(...filtered),score:Infinity};
+    const maxCandidate=Math.min(100,Math.max(...filtered));
+    for(let cell=8;cell<=maxCandidate;cell+=.25){
+      let error=0,ones=0;
+      for(const value of filtered){
+        const n=Math.max(1,Math.min(12,Math.round(value/cell)));
+        error+=Math.abs(value-n*cell)/cell;
+        if(n===1)ones++;
+      }
+      const score=error/filtered.length+(ones===0?.08:0)+(cell<14?.12:0);
+      if(score<best.score)best={cell,score};
+    }
+    return Math.round(best.cell*10)/10;
+  }
+
+  function estimatePhase(edges,cell){
+    let best={phase:0,score:Infinity};
+    for(let phase=0;phase<cell;phase+=.25){
+      let score=0;
+      for(const edge of edges){
+        const rem=((edge-phase)%cell+cell)%cell;
+        score+=Math.min(rem,cell-rem);
+      }
+      if(score<best.score)best={phase,score};
+    }
+    return Math.round(best.phase*10)/10;
+  }
+
+  function syncGridInputs(){
+    for(const key of ["cols","rows","cellW","cellH","originX","originY"])$(key).value=state.grid[key];
+  }
+  function readGridInputs(){
+    state.grid.cols=Math.max(1,+$("cols").value||1);state.grid.rows=Math.max(1,+$("rows").value||1);
+    state.grid.cellW=Math.max(4,+$("cellW").value||4);state.grid.cellH=Math.max(4,+$("cellH").value||4);
+    state.grid.originX=Math.max(0,+$("originX").value||0);state.grid.originY=Math.max(0,+$("originY").value||0);
+  }
+  function updateFromGrid(){
+    state.boxes.forEach(box=>{
+      const left=Math.round((box.x-state.grid.originX)/state.grid.cellW);
+      const top=Math.round((box.y-state.grid.originY)/state.grid.cellH);
+      const right=Math.round((box.x+box.w-state.grid.originX)/state.grid.cellW);
+      const bottom=Math.round((box.y+box.h-state.grid.originY)/state.grid.cellH);
+      box.gridX=Math.max(0,left);
+      box.gridY=Math.max(0,top);
+      if(!box.sizeLocked){
+        box.gridW=Math.max(1,right-left);
+        box.gridH=Math.max(1,bottom-top);
+      }
+    });
+    arrange();
+  }
+
+  function arrange(){
+    readGridInputs();
+    const cols=state.grid.cols,rows=state.grid.rows,occupied=Array.from({length:rows},()=>Array(cols).fill(false));
+    const strategy=arrangeStrategies[state.arrangeStrategy];
+    const sorted=[...state.boxes].sort(strategy.sort);
+    state.layout=[];state.overflow=[];
+    for(const box of sorted){
+      let spot=null;
+      if(strategy.scan==="column"){
+        outerColumn:for(let x=0;x<=cols-box.gridW;x++)for(let y=0;y<=rows-box.gridH;y++){
+          if(canPlace(occupied,x,y,box.gridW,box.gridH)){spot={x,y};break outerColumn}
+        }
+      }else{
+        outerRow:for(let y=0;y<=rows-box.gridH;y++)for(let x=0;x<=cols-box.gridW;x++){
+          if(canPlace(occupied,x,y,box.gridW,box.gridH)){spot={x,y};break outerRow}
+        }
+      }
+      if(!spot){state.overflow.push(box);continue}
+      fill(occupied,spot.x,spot.y,box.gridW,box.gridH);
+      state.layout.push({box,x:spot.x,y:spot.y,w:box.gridW,h:box.gridH});
+    }
+    renderSource();renderResult();updateUI();
+  }
+  function nextArrangement(){
+    if(!state.boxes.length)return;
+    state.arrangeStrategy=(state.arrangeStrategy+1)%arrangeStrategies.length;
+    arrange();
+    const button=$("arrangeBtn"),name=arrangeStrategies[state.arrangeStrategy].name;
+    button.textContent=`已切換：${name}`;
+    window.setTimeout(()=>button.textContent="換一種排列",900);
+  }
+  function canPlace(grid,x,y,w,h){
+    for(let yy=y;yy<y+h;yy++)for(let xx=x;xx<x+w;xx++)if(grid[yy][xx])return false;
+    return true;
+  }
+  function fill(grid,x,y,w,h){for(let yy=y;yy<y+h;yy++)for(let xx=x;xx<x+w;xx++)grid[yy][xx]=true}
+
+  function renderSource(){
+    if(!image.naturalWidth)return;
+    sctx.clearRect(0,0,source.width,source.height);sctx.drawImage(image,0,0);
+    drawGrid(sctx);
+    state.boxes.forEach((box,index)=>{
+      const color=palette[index%palette.length],selected=index===state.selected;
+      sctx.fillStyle=selected?"rgba(255,184,77,.19)":"rgba(53,212,199,.10)";
+      sctx.strokeStyle=selected?varColor("amber"):color;sctx.lineWidth=Math.max(1.5,2/state.scale);
+      sctx.fillRect(box.x,box.y,box.w,box.h);sctx.strokeRect(box.x,box.y,box.w,box.h);
+      const label=`${index+1} · ${box.gridW||1}×${box.gridH||1}`;
+      sctx.font=`700 ${Math.max(10,12/state.scale)}px Segoe UI`;
+      const tw=sctx.measureText(label).width+8/state.scale;
+      sctx.fillStyle=selected?varColor("amber"):color;sctx.fillRect(box.x,box.y-17/state.scale,tw,17/state.scale);
+      sctx.fillStyle="#061119";sctx.fillText(label,box.x+4/state.scale,box.y-4/state.scale);
+    });
+  }
+  function drawGrid(ctx){
+    const g=state.grid;ctx.save();ctx.strokeStyle="rgba(53,212,199,.36)";ctx.lineWidth=Math.max(1,1/state.scale);
+    ctx.beginPath();
+    for(let x=0;x<=g.cols;x++){const px=g.originX+x*g.cellW;ctx.moveTo(px,g.originY);ctx.lineTo(px,g.originY+g.rows*g.cellH)}
+    for(let y=0;y<=g.rows;y++){const py=g.originY+y*g.cellH;ctx.moveTo(g.originX,py);ctx.lineTo(g.originX+g.cols*g.cellW,py)}
+    ctx.stroke();ctx.restore();
+  }
+  function varColor(name){return name==="amber"?"#ffb84d":"#35d4c7"}
+
+  function renderResult(){
+    const cols=state.grid.cols,rows=state.grid.rows,cell=Math.max(13,Math.min(34,Math.floor(630/Math.max(cols,rows))));
+    result.width=cols*cell+2;result.height=rows*cell+2;
+    rctx.clearRect(0,0,result.width,result.height);rctx.fillStyle="#0a151f";rctx.fillRect(0,0,result.width,result.height);
+    rctx.strokeStyle="#263746";rctx.lineWidth=1;rctx.beginPath();
+    for(let x=0;x<=cols;x++){rctx.moveTo(1+x*cell,1);rctx.lineTo(1+x*cell,1+rows*cell)}
+    for(let y=0;y<=rows;y++){rctx.moveTo(1,1+y*cell);rctx.lineTo(1+cols*cell,1+y*cell)}
+    rctx.stroke();
+    state.layout.forEach(entry=>{
+      const index=state.boxes.indexOf(entry.box),selected=index===state.selected,color=selected?"#ffb84d":palette[index%palette.length];
+      const x=2+entry.x*cell,y=2+entry.y*cell,w=entry.w*cell-2,h=entry.h*cell-2;
+      rctx.save();
+      rctx.beginPath();rctx.rect(x,y,w,h);rctx.clip();
+      rctx.drawImage(
+        image,
+        entry.box.x,entry.box.y,entry.box.w,entry.box.h,
+        x,y,w,h
+      );
+      rctx.fillStyle=selected?"rgba(255,184,77,.18)":"rgba(3,12,18,.08)";
+      rctx.fillRect(x,y,w,h);
+      rctx.restore();
+      rctx.strokeStyle=color;rctx.lineWidth=selected?3:2;rctx.strokeRect(x,y,w,h);
+      const label=`${index+1} · ${entry.w}×${entry.h}`;
+      rctx.font=`700 ${Math.max(9,Math.min(13,cell*.38))}px Segoe UI`;
+      const labelW=Math.min(w,rctx.measureText(label).width+8);
+      rctx.fillStyle="rgba(5,14,21,.82)";rctx.fillRect(x,y,labelW,Math.max(16,cell*.55));
+      rctx.fillStyle="#f4fbfd";rctx.fillText(label,x+4,y+Math.max(12,cell*.42));
+    });
+  }
+
+  function updateUI(){
+    const count=state.boxes.length;
+    $("detectSummary").textContent=`${count} 件道具`;
+    $("boxCount").textContent=count;
+    $("oneCellCount").textContent=state.boxes.filter(b=>b.gridW===1&&b.gridH===1).length;
+    $("largeCount").textContent=state.boxes.filter(b=>(b.gridW||1)*(b.gridH||1)>1).length;
+    $("bagSize").textContent=`${state.grid.cols} × ${state.grid.rows}`;
+    const used=state.layout.reduce((sum,e)=>sum+e.w*e.h,0);
+    $("usedCells").textContent=`${used} / ${state.grid.cols*state.grid.rows}`;
+    $("overflowCount").textContent=state.overflow.length;
+    $("arrangeMode").textContent=arrangeStrategies[state.arrangeStrategy].name;
+    updateItemList();updateSelection();
+  }
+  function updateItemList(){
+    if(!state.boxes.length){$("itemList").innerHTML='<div class="info">辨識後會顯示道具。</div>';return}
+    $("itemList").innerHTML=state.boxes.map((box,index)=>`
+      <div class="item-row ${index===state.selected?"active":""}" data-index="${index}" style="--item:${palette[index%palette.length]}">
+        <i></i><span>道具 ${index+1}</span><small>${box.gridW}×${box.gridH}${box.confidence?` · ${Math.round(box.confidence*100)}%`:" · 手動"}</small>
+      </div>`).join("");
+    $("itemList").querySelectorAll(".item-row").forEach(row=>row.onclick=()=>select(+row.dataset.index));
+  }
+  function updateSelection(){
+    const box=state.boxes[state.selected],panel=$("selectionPanel");
+    panel.hidden=!box;
+    if(!box){$("selectedDetail").textContent="點選左側原圖或排列圖中的道具，可查看原位置與建議位置。";return}
+    $("itemW").value=box.gridW;$("itemH").value=box.gridH;
+    $("selectedConfidence").textContent=box.confidence?`信心 ${Math.round(box.confidence*100)}%`:"手動補框";
+    const placed=state.layout.find(e=>e.box===box);
+    const original=`原位置：第 ${box.gridX+1} 欄、第 ${box.gridY+1} 列`;
+    const target=placed?`建議位置：第 ${placed.x+1} 欄、第 ${placed.y+1} 列`:"建議位置：背包空間不足";
+    $("selectedDetail").innerHTML=`<b>道具 ${state.selected+1}｜${box.gridW} × ${box.gridH} 格</b><br>${original}　→　${target}`;
+  }
+  function select(index){state.selected=index;renderSource();renderResult();updateUI()}
+
+  function point(e,canvas){
+    const rect=canvas.getBoundingClientRect();
+    return{x:(e.clientX-rect.left)*canvas.width/rect.width,y:(e.clientY-rect.top)*canvas.height/rect.height};
+  }
+  function hitSource(p){
+    for(let i=state.boxes.length-1;i>=0;i--){const b=state.boxes[i];if(p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h)return i}
+    return -1;
+  }
+  source.onpointerdown=e=>{
+    if(!image.naturalWidth)return;
+    const p=point(e,source),index=hitSource(p);source.setPointerCapture(e.pointerId);state.start=p;
+    if(index>=0){state.selected=index;state.action="move";state.original={...state.boxes[index]}}
+    else{
+      state.selected=state.boxes.length;state.boxes.push({x:p.x,y:p.y,w:1,h:1,confidence:0,manual:true,id:`manual-${Date.now()}`});
+      state.action="draw";state.original=null;
+    }
+    renderSource();updateUI();
+  };
+  source.onpointermove=e=>{
+    if(!state.action)return;
+    const p=point(e,source),box=state.boxes[state.selected],dx=p.x-state.start.x,dy=p.y-state.start.y;
+    if(state.action==="move"){box.x=Math.max(0,Math.min(source.width-box.w,state.original.x+dx));box.y=Math.max(0,Math.min(source.height-box.h,state.original.y+dy))}
+    else{box.w=Math.max(1,p.x-box.x);box.h=Math.max(1,p.y-box.y)}
+    box.gridX=Math.max(0,Math.round((box.x-state.grid.originX)/state.grid.cellW));
+    box.gridY=Math.max(0,Math.round((box.y-state.grid.originY)/state.grid.cellH));
+    box.gridW=Math.max(1,Math.round(box.w/state.grid.cellW));box.gridH=Math.max(1,Math.round(box.h/state.grid.cellH));
+    renderSource();
+  };
+  source.onpointerup=()=>{
+    if(!state.action)return;
+    const box=state.boxes[state.selected];
+    if(box.w<5||box.h<5){state.boxes.splice(state.selected,1);state.selected=-1}
+    state.action=null;arrange();
+  };
+  result.onclick=e=>{
+    const p=point(e,result),cols=state.grid.cols,cell=(result.width-2)/cols;
+    const entry=state.layout.find(v=>p.x>=2+v.x*cell&&p.x<=2+(v.x+v.w)*cell&&p.y>=2+v.y*cell&&p.y<=2+(v.y+v.h)*cell);
+    if(entry)select(state.boxes.indexOf(entry.box));
+  };
+
+  function applySelectedSize(){
+    const box=state.boxes[state.selected];if(!box)return;
+    box.gridW=Math.max(1,+$("itemW").value||1);box.gridH=Math.max(1,+$("itemH").value||1);
+    box.sizeLocked=true;
+    box.w=box.gridW*state.grid.cellW;box.h=box.gridH*state.grid.cellH;arrange();
+  }
+  function snapSelected(){
+    const box=state.boxes[state.selected];if(!box)return;
+    box.gridX=Math.max(0,Math.round((box.x-state.grid.originX)/state.grid.cellW));
+    box.gridY=Math.max(0,Math.round((box.y-state.grid.originY)/state.grid.cellH));
+    box.x=state.grid.originX+box.gridX*state.grid.cellW;box.y=state.grid.originY+box.gridY*state.grid.cellH;
+    box.sizeLocked=true;
+    box.w=box.gridW*state.grid.cellW;box.h=box.gridH*state.grid.cellH;arrange();
+  }
+  function deleteSelected(){
+    if(state.selected<0)return;
+    state.boxes.splice(state.selected,1);state.selected=Math.min(state.selected,state.boxes.length-1);arrange();
+  }
+
+  ensureModel().catch(()=>{});
+  renderResult();updateUI();
+})();
+</script>
+</body>
+</html>
