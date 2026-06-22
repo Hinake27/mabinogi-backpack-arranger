@@ -120,7 +120,7 @@
   <header>
     <div>
       <h1>新瑪奇背包排列工具</h1>
-      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.23-r11</p>
+      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.23-r12</p>
     </div>
     <div class="header-actions">
       <div class="status"><span class="dot" id="modelDot"></span><span id="modelStatus">模型尚未載入</span></div>
@@ -337,7 +337,7 @@
       $("imageInfo").textContent=`${file.name} · ${image.naturalWidth}×${image.naturalHeight}`;
       $("detectBtn").disabled=false;$("inferGridBtn").disabled=true;$("arrangeBtn").disabled=true;
       $("gridAutoSummary").textContent="正在自動分析…";
-      $("gridAutoInfo").textContent="模型會先辨識道具，再從所有道具邊界推測格線與占用格數。";
+      $("gridAutoInfo").textContent="工具會先分析圖片本身的水平／垂直格線週期，再用道具框輔助校正。";
       fitSource();renderSource();renderResult();updateUI();
       await detect();
     };
@@ -367,7 +367,7 @@
       state.selected=state.boxes.length?0:-1;
       inferGrid();syncGridInputs();updateFromGrid();
       $("gridAutoSummary").textContent=`${state.grid.cols} 欄 × ${state.grid.rows} 列`;
-      $("gridAutoInfo").innerHTML=`已自動算出每格約 <b>${state.grid.cellW} × ${state.grid.cellH}</b> 像素，並完成 ${state.boxes.length} 件道具的格數換算。`;
+      $("gridAutoInfo").innerHTML=`使用 <b>${state.gridSource||"自動分析"}</b> 算出每格約 <b>${state.grid.cellW} × ${state.grid.cellH}</b> 像素，並完成 ${state.boxes.length} 件道具的格數換算。`;
       $("inferGridBtn").disabled=!state.boxes.length;
       $("arrangeBtn").disabled=!state.boxes.length;
     }catch(error){
@@ -422,15 +422,105 @@
 
   function inferGrid(){
     if(!state.boxes.length)return;
+    const pixelGrid=detectGridFromImage();
     const widths=state.boxes.map(b=>b.w),heights=state.boxes.map(b=>b.h);
-    state.grid.cellW=estimateCell(widths,image.naturalWidth);
-    state.grid.cellH=estimateCell(heights,image.naturalHeight);
-    state.grid.originX=estimatePhase(state.boxes.flatMap(b=>[b.x,b.x+b.w]),state.grid.cellW);
-    state.grid.originY=estimatePhase(state.boxes.flatMap(b=>[b.y,b.y+b.h]),state.grid.cellH);
+    const boxCellW=estimateCell(widths,image.naturalWidth);
+    const boxCellH=estimateCell(heights,image.naturalHeight);
+    state.grid.cellW=pixelGrid.x.confident?pixelGrid.x.period:boxCellW;
+    state.grid.cellH=pixelGrid.y.confident?pixelGrid.y.period:boxCellH;
+    state.grid.originX=pixelGrid.x.confident?pixelGrid.x.origin:estimatePhase(state.boxes.flatMap(b=>[b.x,b.x+b.w]),state.grid.cellW);
+    state.grid.originY=pixelGrid.y.confident?pixelGrid.y.origin:estimatePhase(state.boxes.flatMap(b=>[b.y,b.y+b.h]),state.grid.cellH);
     state.grid.cols=Math.max(1,Math.round((image.naturalWidth-state.grid.originX)/state.grid.cellW));
     state.grid.rows=Math.max(1,Math.round((image.naturalHeight-state.grid.originY)/state.grid.cellH));
     if(state.grid.cols>60)state.grid.cols=Math.max(1,Math.round(image.naturalWidth/state.grid.cellW));
     if(state.grid.rows>60)state.grid.rows=Math.max(1,Math.round(image.naturalHeight/state.grid.cellH));
+    state.gridSource=pixelGrid.x.confident&&pixelGrid.y.confident?"圖片格線":"道具框輔助";
+  }
+
+  function detectGridFromImage(){
+    const canvas=document.createElement("canvas"),ctx=canvas.getContext("2d",{willReadFrequently:true});
+    canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;ctx.drawImage(image,0,0);
+    const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+    return{
+      x:detectAxisPeriod(pixels,canvas.width,canvas.height,"x"),
+      y:detectAxisPeriod(pixels,canvas.width,canvas.height,"y")
+    };
+  }
+  function detectAxisPeriod(pixels,width,height,axis){
+    const size=axis==="x"?width:height,cross=axis==="x"?height:width;
+    const projection=new Float64Array(size);
+    for(let pos=1;pos<size;pos++){
+      let sum=0,samples=0;
+      for(let other=0;other<cross;other+=2){
+        const x=axis==="x"?pos:other,y=axis==="x"?other:pos;
+        const px=axis==="x"?pos-1:other,py=axis==="x"?other:pos-1;
+        const a=(y*width+x)*4,b=(py*width+px)*4;
+        sum+=Math.abs(pixels[a]-pixels[b])+Math.abs(pixels[a+1]-pixels[b+1])+Math.abs(pixels[a+2]-pixels[b+2]);
+        samples++;
+      }
+      projection[pos]=sum/(samples*3||1);
+    }
+    const smooth=new Float64Array(size);
+    for(let i=0;i<size;i++)smooth[i]=(projection[Math.max(0,i-1)]+projection[i]+projection[Math.min(size-1,i+1)])/3;
+    const mean=smooth.reduce((a,b)=>a+b,0)/size;
+    const maxPeriod=Math.min(90,Math.floor(size/3));
+    const candidates=[];
+    for(let period=14;period<=maxPeriod;period+=.25){
+      let bestPhase=0,bestLine=-Infinity,bestCount=0;
+      for(let phase=0;phase<period;phase+=.5){
+        let total=0,count=0;
+        for(let p=phase;p<size;p+=period){total+=sampleArray(smooth,p);count++}
+        if(count>=5){
+          const line=total/count+(count*.16);
+          if(line>bestLine){bestLine=line;bestPhase=phase;bestCount=count}
+        }
+      }
+      let corr=0,corrCount=0;
+      const shift=Math.round(period);
+      for(let i=1;i<size-shift;i++){corr+=Math.min(smooth[i],smooth[i+shift]);corrCount++}
+      corr/=corrCount||1;
+      candidates.push({period,phase:bestPhase,score:(bestLine-mean)+corr*.28,count:bestCount});
+    }
+    candidates.sort((a,b)=>b.score-a.score);
+    const peak=candidates[0]||{period:32,phase:0,score:0,count:0};
+    let best=peak;
+    while(best.period/2>=14){
+      const half=best.period/2;
+      const harmonic=candidates
+        .filter(c=>Math.abs(c.period-half)<=1)
+        .sort((a,b)=>b.score-a.score)[0];
+      if(harmonic&&harmonic.score>=best.score*.42&&harmonic.count>=best.count*1.55)best=harmonic;
+      else break;
+    }
+    const scores=candidates.map(c=>c.score).sort((a,b)=>a-b);
+    const median=scores[Math.floor(scores.length/2)]||0;
+    const origin=normalizeGridOrigin(best.phase,best.period,size,smooth);
+    return{
+      period:Math.round(best.period*10)/10,
+      origin:Math.round(origin*10)/10,
+      confident:best.count>=5&&best.score>median*1.16&&best.score>1.2,
+      score:best.score
+    };
+  }
+  function sampleArray(values,index){
+    const low=Math.floor(index),high=Math.min(values.length-1,low+1),mix=index-low;
+    return values[low]*(1-mix)+values[high]*mix;
+  }
+  function normalizeGridOrigin(phase,period,size,projection){
+    let origin=phase;
+    while(origin-period>=0)origin-=period;
+    while(origin<0)origin+=period;
+    const options=[];
+    for(let shift=-2;shift<=2;shift++){
+      const candidate=origin+shift*period;
+      if(candidate>=0&&candidate<period*1.5)options.push(candidate);
+    }
+    if(!options.length)return origin;
+    return options.sort((a,b)=>{
+      const aLines=Math.round((size-a)/period),bLines=Math.round((size-b)/period);
+      const aEdge=Math.abs((a+aLines*period)-size),bEdge=Math.abs((b+bLines*period)-size);
+      return aEdge-bEdge;
+    })[0];
   }
 
   function estimateCell(values,imageSize){
