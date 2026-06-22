@@ -120,7 +120,7 @@
   <header>
     <div>
       <h1>新瑪奇背包排列工具</h1>
-      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.22-r8</p>
+      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.23-r11</p>
     </div>
     <div class="header-actions">
       <div class="status"><span class="dot" id="modelDot"></span><span id="modelStatus">模型尚未載入</span></div>
@@ -220,8 +220,8 @@
               <option value="br">右下</option>
             </select>
           </label>
-          <label class="range-line"><span>保留空間 <b id="reserveText">0%</b></span>
-            <input id="reserveSpace" type="range" min="0" max="30" step="5" value="0">
+          <label class="range-line"><span>排列變化 <b id="variationText">0%</b></span>
+            <input id="arrangementVariation" type="range" min="0" max="100" step="5" value="0">
           </label>
         </div>
         <div class="toggle-row">
@@ -267,7 +267,7 @@
   const palette = ["#35d4c7","#ffb84d","#5caeff","#ff7c92","#a98cff","#7ee081","#e8d35f","#f58e5b"];
   const state = {
     session:null,file:null,boxes:[],selected:-1,layout:[],overflow:[],
-    scale:1,action:null,start:null,original:null,
+    scale:1,action:null,start:null,original:null,variantKey:"",variants:[],
     grid:{cols:10,rows:8,cellW:32,cellH:32,originX:0,originY:0}
   };
   const strategyNames={
@@ -295,11 +295,18 @@
   ["cols","rows","cellW","cellH","originX","originY"].forEach(id => {
     $(id).onchange = () => { readGridInputs(); updateFromGrid(); };
   });
-  ["arrangeType","arrangeDirection","groupSame","groupLong"].forEach(id=>$(id).onchange=arrange);
-  $("reserveSpace").oninput=()=>{
-    $("reserveText").textContent=`${$("reserveSpace").value}%`;
+  ["arrangeType","arrangeDirection","groupSame","groupLong"].forEach(id=>$(id).onchange=resetArrangementVariants);
+  $("arrangementVariation").oninput=()=>{
+    $("variationText").textContent=`${$("arrangementVariation").value}%`;
     arrange();
   };
+  function resetArrangementVariants(){
+    state.variantKey="";
+    state.variants=[];
+    $("arrangementVariation").value=0;
+    $("variationText").textContent="0%";
+    arrange();
+  }
   window.addEventListener("resize", fitSource);
 
   async function ensureModel(){
@@ -485,52 +492,123 @@
     readGridInputs();
     const requested=$("arrangeType").value;
     const direction=$("arrangeDirection").value;
-    const reserve=+$("reserveSpace").value||0;
+    const variation=+$("arrangementVariation").value||0;
     const groupSame=$("groupSame").checked,groupLong=$("groupLong").checked;
-    let resultPack;
-    if(requested==="auto"){
-      const candidates=[];
-      const modes=["compact","holes","large","small","tall","wide","same","long","move","original"];
-      const directions=["tl","tr","bl","br"];
-      for(const mode of modes)for(const dir of directions){
-        candidates.push(packLayout(mode,dir,reserve,groupSame,groupLong));
-      }
-      resultPack=candidates.sort((a,b)=>a.score-b.score)[0];
-      $("arrangeHint").textContent=`自動選中：${strategyNames[resultPack.mode]}／${directionName(resultPack.direction)}`;
-    }else{
-      resultPack=packLayout(requested,direction,reserve,groupSame,groupLong);
-      $("arrangeHint").textContent=`目前使用：${strategyNames[requested]}／${directionName(direction)}`;
+    const variantKey=[
+      requested,direction,groupSame,groupLong,state.grid.cols,state.grid.rows,
+      ...state.boxes.map(b=>`${b.gridX},${b.gridY},${b.gridW},${b.gridH}`)
+    ].join("|");
+    if(state.variantKey!==variantKey){
+      state.variantKey=variantKey;
+      state.variants=generateLayoutVariants(requested,direction,groupSame,groupLong);
     }
+    const variants=state.variants;
+    let resultPack=pickVariation(variants,variation);
+    if(!resultPack)resultPack=packOriginalLayout();
     state.layout=resultPack.layout;state.overflow=resultPack.overflow;
-    $("arrangeMode").textContent=requested==="auto"?`自動：${strategyNames[resultPack.mode]}`:strategyNames[requested];
+    const totalArea=state.boxes.reduce((sum,b)=>sum+b.gridW*b.gridH,0);
+    const capacity=state.grid.cols*state.grid.rows;
+    if(totalArea>capacity){
+      $("arrangeHint").textContent=`道具共 ${totalArea} 格，但背包只有 ${capacity} 格；請檢查錯誤格數。`;
+    }else if(resultPack.mode==="original-fallback"&&resultPack.variantCount>1){
+      $("arrangeHint").textContent=`排列 ${variation}%：保留目前位置；向右拖動可切換其他完整排列。`;
+    }else if(resultPack.mode==="original-fallback"){
+      $("arrangeHint").textContent="重新排列無法完整裝入，已自動改用原位置保底，確保不超出背包。";
+    }else{
+      $("arrangeHint").textContent=`排列 ${variation}%：第 ${resultPack.variantIndex+1}／${resultPack.variantCount} 種完整配置`;
+    }
+    $("arrangeMode").textContent=resultPack.mode==="original-fallback"?"目前位置":requested==="auto"?`自動：${strategyNames[resultPack.mode]||"最佳解"}`:strategyNames[requested];
     renderSource();renderResult();updateUI();
   }
-  function packLayout(mode,direction,reservePercent,groupSame,groupLong){
+  function packLayout(mode,direction,groupSame,groupLong){
     const cols=state.grid.cols,rows=state.grid.rows;
-    const reserved=Math.round(cols*rows*reservePercent/100);
-    let usableCols=cols,usableRows=rows;
-    if(reserved>0){
-      const colCut=Math.min(cols-1,Math.floor(reserved/rows));
-      usableCols=Math.max(1,cols-colCut);
-      const remain=reserved-colCut*rows;
-      if(remain>0)usableRows=Math.max(1,rows-Math.ceil(remain/usableCols));
-    }
-    const grid=Array.from({length:rows},()=>Array(cols).fill(true));
-    const xOffset=direction.includes("r")?cols-usableCols:0;
-    const yOffset=direction.includes("b")?rows-usableRows:0;
-    for(let y=yOffset;y<yOffset+usableRows;y++)for(let x=xOffset;x<xOffset+usableCols;x++)grid[y][x]=false;
+    const usableCols=cols,usableRows=rows;
+    const grid=Array.from({length:rows},()=>Array(cols).fill(false));
     const ordered=sortBoxes(mode,groupSame,groupLong);
+    return packOrdered(ordered,mode,direction,grid,usableCols,usableRows);
+  }
+  function packOrdered(ordered,mode,direction,grid,usableCols,usableRows){
     const layout=[],overflow=[];
     for(const box of ordered){
       const spots=findSpots(grid,box.gridW,box.gridH,direction);
       if(!spots.length){overflow.push(box);continue}
-      const spot=mode==="move"
-        ?spots.sort((a,b)=>moveDistance(a,box)-moveDistance(b,box))[0]
-        :spots[0];
+      const spot=spots.sort((a,b)=>spotScore(a,box,grid,mode)-spotScore(b,box,grid,mode))[0];
       fill(grid,spot.x,spot.y,box.gridW,box.gridH);
       layout.push({box,x:spot.x,y:spot.y,w:box.gridW,h:box.gridH});
     }
     return{layout,overflow,mode,direction,score:scoreLayout(layout,overflow,grid,usableCols,usableRows)};
+  }
+  function spotScore(spot,box,grid,mode){
+    if(mode==="move")return moveDistance(spot,box);
+    let contacts=0;
+    for(let x=spot.x;x<spot.x+box.gridW;x++){
+      if(spot.y===0||grid[spot.y-1][x])contacts++;
+      if(spot.y+box.gridH===grid.length||grid[spot.y+box.gridH][x])contacts++;
+    }
+    for(let y=spot.y;y<spot.y+box.gridH;y++){
+      if(spot.x===0||grid[y][spot.x-1])contacts++;
+      if(spot.x+box.gridW===grid[0].length||grid[y][spot.x+box.gridW])contacts++;
+    }
+    return-contacts*1000+spot.y*grid[0].length+spot.x;
+  }
+  function generateLayoutVariants(requested,direction,groupSame,groupLong){
+    const cols=state.grid.cols,rows=state.grid.rows,variants=[],seen=new Set;
+    const add=candidate=>{
+      if(candidate.overflow.length)return;
+      const key=candidate.layout
+        .map(e=>`${state.boxes.indexOf(e.box)}:${e.x},${e.y}`)
+        .sort().join("|");
+      if(seen.has(key))return;
+      seen.add(key);
+      candidate.movement=candidate.layout.reduce((sum,e)=>sum+moveDistance(e,e.box),0);
+      variants.push(candidate);
+    };
+    const modes=requested==="auto"
+      ?["compact","holes","large","small","tall","wide","same","long","move","original"]
+      :[requested];
+    const directions=requested==="auto"?["tl","tr","bl","br"]:[direction];
+    for(const mode of modes)for(const dir of directions)add(packLayout(mode,dir,groupSame,groupLong));
+    let seed=state.boxes.length*97+cols*31+rows*13+requested.length*19;
+    const random=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296};
+    for(let attempt=0;attempt<240;attempt++){
+      const mode=modes[Math.floor(random()*modes.length)];
+      const dir=directions[Math.floor(random()*directions.length)];
+      const ordered=sortBoxes(mode,groupSame,groupLong);
+      const swaps=1+Math.floor(random()*Math.max(1,Math.min(ordered.length,8)));
+      for(let s=0;s<swaps;s++){
+        const a=Math.floor(random()*ordered.length),b=Math.floor(random()*ordered.length);
+        [ordered[a],ordered[b]]=[ordered[b],ordered[a]];
+      }
+      const grid=Array.from({length:rows},()=>Array(cols).fill(false));
+      add(packOrdered(ordered,mode,dir,grid,cols,rows));
+    }
+    if(!variants.length){
+      const original=packOriginalLayout();
+      if(!original.overflow.length)add(original);
+    }
+    return variants.sort((a,b)=>{
+      if(requested==="move")return a.movement-b.movement||a.score-b.score;
+      if(requested==="auto")return a.score-b.score||a.movement-b.movement;
+      return a.score-b.score||a.movement-b.movement;
+    });
+  }
+  function pickVariation(variants,variation){
+    if(!variants.length)return null;
+    const index=Math.min(variants.length-1,Math.round((variation/100)*(variants.length-1)));
+    return{...variants[index],variantIndex:index,variantCount:variants.length};
+  }
+  function packOriginalLayout(){
+    const cols=state.grid.cols,rows=state.grid.rows,grid=Array.from({length:rows},()=>Array(cols).fill(false));
+    const layout=[],overflow=[];
+    for(const box of state.boxes){
+      const x=Math.round(box.gridX||0),y=Math.round(box.gridY||0);
+      if(x<0||y<0||x+box.gridW>cols||y+box.gridH>rows||!canPlace(grid,x,y,box.gridW,box.gridH)){
+        overflow.push(box);continue;
+      }
+      fill(grid,x,y,box.gridW,box.gridH);
+      layout.push({box,x,y,w:box.gridW,h:box.gridH});
+    }
+    return{layout,overflow,mode:"original-fallback",direction:"tl",score:scoreLayout(layout,overflow,grid,cols,rows)-1};
   }
   function sortBoxes(mode,groupSame,groupLong){
     const index=box=>state.boxes.indexOf(box);
