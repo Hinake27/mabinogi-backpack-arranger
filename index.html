@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
@@ -15,7 +15,7 @@
     *{box-sizing:border-box}
     html,body{height:100%}
     body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI","Noto Sans TC",sans-serif;overflow:hidden}
-    button,input{font:inherit}
+    button,input,select{font:inherit}
     button{
       min-height:38px;padding:0 14px;border:1px solid var(--line);border-radius:9px;
       background:#162534;color:var(--text);cursor:pointer;transition:.16s ease;
@@ -25,11 +25,11 @@
     .primary{background:var(--cyan);border-color:var(--cyan);color:#03211f;font-weight:750}
     .danger{color:#ffd1d5}
     input[type=file]{display:none}
-    input[type=number],input[type=range]{
+    input[type=number],input[type=range],select{
       width:100%;height:38px;border:1px solid var(--line);border-radius:8px;
       background:#09151f;color:var(--text);padding:0 10px;outline:none;
     }
-    input:focus{border-color:var(--cyan)}
+    input:focus,select:focus{border-color:var(--cyan)}
     input[type=range]{padding:0;accent-color:var(--cyan)}
     .app{height:100vh;display:grid;grid-template-rows:70px minmax(0,1fr) 48px}
     header,footer{display:flex;align-items:center;justify-content:space-between;padding:0 18px;background:#08121b}
@@ -70,6 +70,10 @@
       color:var(--muted);font-size:12px;line-height:1.65;
     }
     .info b{color:var(--text)}
+    details{border:1px solid var(--line);border-radius:10px;background:#09151f;overflow:hidden}
+    summary{padding:11px 12px;color:var(--muted);font-size:12px;cursor:pointer;user-select:none}
+    details[open] summary{border-bottom:1px solid var(--line);color:var(--text)}
+    .advanced-grid{padding:12px;display:grid;gap:10px}
     .item-list{display:grid;gap:6px;max-height:250px;overflow:auto}
     .item-row{
       display:grid;grid-template-columns:24px 1fr auto;align-items:center;gap:8px;
@@ -81,6 +85,12 @@
     .selection{display:grid;gap:10px}
     .selection[hidden]{display:none}
     .result-wrap{flex:1;min-height:0;overflow:auto;padding:26px;display:grid;place-items:center;background:#08121b}
+    .arrange-controls{padding:12px 14px;border-bottom:1px solid var(--line);background:#0b1620;display:grid;gap:10px}
+    .arrange-grid{display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:9px}
+    .toggle-row{display:flex;gap:14px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:11px}
+    .toggle-row label{display:flex;grid-auto-flow:column;align-items:center;gap:7px}
+    .toggle-row input{width:16px;height:16px;accent-color:var(--cyan)}
+    .range-line{display:grid;grid-template-columns:1fr 48px;gap:8px;align-items:end}
     .result-shell{min-width:320px;max-width:100%;display:grid;gap:14px}
     .result-summary{display:flex;justify-content:space-between;gap:15px;color:var(--muted);font-size:12px}
     .result-summary b{color:var(--text)}
@@ -110,13 +120,13 @@
   <header>
     <div>
       <h1>新瑪奇背包排列工具</h1>
-      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.22-r4</p>
+      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.22-r8</p>
     </div>
     <div class="header-actions">
       <div class="status"><span class="dot" id="modelDot"></span><span id="modelStatus">模型尚未載入</span></div>
       <button id="openBtn">選擇背包圖片</button>
       <input id="fileInput" type="file" accept="image/*">
-      <button id="detectBtn" class="primary" disabled>辨識道具</button>
+      <button id="detectBtn" class="primary" disabled>重新辨識</button>
     </div>
   </header>
 
@@ -143,16 +153,22 @@
         </div>
 
         <div class="section">
-          <div class="section-title"><strong>背包格線</strong><button id="inferGridBtn" disabled>重新推測</button></div>
-          <div class="grid-form">
-            <label>欄數<input id="cols" type="number" min="1" max="80" value="10"></label>
-            <label>列數<input id="rows" type="number" min="1" max="80" value="8"></label>
-            <label>格寬<input id="cellW" type="number" min="4" max="200" step=".1" value="32"></label>
-            <label>格高<input id="cellH" type="number" min="4" max="200" step=".1" value="32"></label>
-            <label>起點 X<input id="originX" type="number" min="0" step=".1" value="0"></label>
-            <label>起點 Y<input id="originY" type="number" min="0" step=".1" value="0"></label>
-          </div>
-          <div class="info">青色線是推測格線。若道具格數不對，只需微調格寬、格高或起點。</div>
+          <div class="section-title"><strong>自動格數</strong><span id="gridAutoSummary">等待圖片</span></div>
+          <div class="info" id="gridAutoInfo">上傳圖片後會自動辨識道具、推測背包大小並計算每件道具占用格數。</div>
+          <details>
+            <summary>進階手動修正（通常不需要）</summary>
+            <div class="advanced-grid">
+              <div class="grid-form">
+                <label>欄數<input id="cols" type="number" min="1" max="80" value="10"></label>
+                <label>列數<input id="rows" type="number" min="1" max="80" value="8"></label>
+                <label>格寬<input id="cellW" type="number" min="4" max="200" step=".1" value="32"></label>
+                <label>格高<input id="cellH" type="number" min="4" max="200" step=".1" value="32"></label>
+                <label>起點 X<input id="originX" type="number" min="0" step=".1" value="0"></label>
+                <label>起點 Y<input id="originY" type="number" min="0" step=".1" value="0"></label>
+              </div>
+              <button id="inferGridBtn" disabled>重新自動推測</button>
+            </div>
+          </details>
         </div>
 
         <div class="section selection" id="selectionPanel" hidden>
@@ -176,8 +192,43 @@
 
     <section class="pane">
       <div class="pane-head">
-        <strong>建議排列 <small id="arrangeMode">大型優先</small></strong>
-        <div class="row-actions"><button id="arrangeBtn" class="primary" disabled>換一種排列</button></div>
+        <strong>建議排列 <small id="arrangeMode">自動最佳化</small></strong>
+        <div class="row-actions"><button id="arrangeBtn" class="primary" disabled>套用排列</button></div>
+      </div>
+      <div class="arrange-controls">
+        <div class="arrange-grid">
+          <label>排列方式
+            <select id="arrangeType">
+              <option value="auto">自動最佳化</option>
+              <option value="compact">最緊密排列</option>
+              <option value="holes">最少空洞</option>
+              <option value="large">大型優先</option>
+              <option value="small">小型補縫</option>
+              <option value="tall">高物品優先</option>
+              <option value="wide">寬物品優先</option>
+              <option value="same">同尺寸分類</option>
+              <option value="long">長條集中</option>
+              <option value="move">最少移動</option>
+              <option value="original">保持原順序</option>
+            </select>
+          </label>
+          <label>排列起點
+            <select id="arrangeDirection">
+              <option value="tl">左上</option>
+              <option value="tr">右上</option>
+              <option value="bl">左下</option>
+              <option value="br">右下</option>
+            </select>
+          </label>
+          <label class="range-line"><span>保留空間 <b id="reserveText">0%</b></span>
+            <input id="reserveSpace" type="range" min="0" max="30" step="5" value="0">
+          </label>
+        </div>
+        <div class="toggle-row">
+          <label><input id="groupSame" type="checkbox">同尺寸集中</label>
+          <label><input id="groupLong" type="checkbox">長條道具集中</label>
+          <span id="arrangeHint">會嘗試多種組合並選出最佳結果。</span>
+        </div>
       </div>
       <div class="result-wrap">
         <div class="result-shell">
@@ -212,19 +263,18 @@
   const image = new Image();
   const MODEL_SIZE = 640;
   const MODEL_URL = "models/mabinogi_items.onnx";
+  const RULER_LEFT = 34, RULER_TOP = 28;
   const palette = ["#35d4c7","#ffb84d","#5caeff","#ff7c92","#a98cff","#7ee081","#e8d35f","#f58e5b"];
   const state = {
     session:null,file:null,boxes:[],selected:-1,layout:[],overflow:[],
-    scale:1,action:null,start:null,original:null,arrangeStrategy:0,
+    scale:1,action:null,start:null,original:null,
     grid:{cols:10,rows:8,cellW:32,cellH:32,originX:0,originY:0}
   };
-  const arrangeStrategies = [
-    {name:"大型優先",sort:(a,b)=>(b.gridW*b.gridH-a.gridW*a.gridH)||Math.max(b.gridW,b.gridH)-Math.max(a.gridW,a.gridH),scan:"row"},
-    {name:"高物品優先",sort:(a,b)=>(b.gridH-a.gridH)||(b.gridW-a.gridW),scan:"row"},
-    {name:"寬物品優先",sort:(a,b)=>(b.gridW-a.gridW)||(b.gridH-a.gridH),scan:"column"},
-    {name:"小型補縫",sort:(a,b)=>(a.gridW*a.gridH-b.gridW*b.gridH)||(b.gridW-a.gridW),scan:"row"},
-    {name:"保持原順序",sort:(a,b)=>state.boxes.indexOf(a)-state.boxes.indexOf(b),scan:"row"}
-  ];
+  const strategyNames={
+    auto:"自動最佳化",compact:"最緊密排列",holes:"最少空洞",large:"大型優先",
+    small:"小型補縫",tall:"高物品優先",wide:"寬物品優先",same:"同尺寸分類",
+    long:"長條集中",move:"最少移動",original:"保持原順序"
+  };
 
   // ONNX Runtime 的動態 import 必須使用完整 URL；"vendor/" 會被瀏覽器
   // 當成套件名稱，造成 Failed to resolve module specifier。
@@ -235,7 +285,7 @@
   $("openBtn").onclick = () => $("fileInput").click();
   $("fileInput").onchange = e => e.target.files[0] && loadImage(e.target.files[0]);
   $("detectBtn").onclick = detect;
-  $("arrangeBtn").onclick = nextArrangement;
+  $("arrangeBtn").onclick = arrange;
   $("inferGridBtn").onclick = () => { inferGrid(); syncGridInputs(); updateFromGrid(); };
   $("confidence").oninput = () => $("confidenceText").textContent = `信心 ${$("confidence").value}%`;
   $("deleteBtn").onclick = deleteSelected;
@@ -245,6 +295,11 @@
   ["cols","rows","cellW","cellH","originX","originY"].forEach(id => {
     $(id).onchange = () => { readGridInputs(); updateFromGrid(); };
   });
+  ["arrangeType","arrangeDirection","groupSame","groupLong"].forEach(id=>$(id).onchange=arrange);
+  $("reserveSpace").oninput=()=>{
+    $("reserveText").textContent=`${$("reserveSpace").value}%`;
+    arrange();
+  };
   window.addEventListener("resize", fitSource);
 
   async function ensureModel(){
@@ -267,14 +322,17 @@
 
   function loadImage(file){
     const url = URL.createObjectURL(file);
-    image.onload = () => {
+    image.onload = async () => {
       URL.revokeObjectURL(url);
       state.file=file;state.boxes=[];state.layout=[];state.overflow=[];state.selected=-1;
-      source.width=image.naturalWidth;source.height=image.naturalHeight;
+      source.width=image.naturalWidth+RULER_LEFT;source.height=image.naturalHeight+RULER_TOP;
       $("sourceCanvas").classList.remove("hidden");$("sourceEmpty").classList.add("hidden");
       $("imageInfo").textContent=`${file.name} · ${image.naturalWidth}×${image.naturalHeight}`;
       $("detectBtn").disabled=false;$("inferGridBtn").disabled=true;$("arrangeBtn").disabled=true;
+      $("gridAutoSummary").textContent="正在自動分析…";
+      $("gridAutoInfo").textContent="模型會先辨識道具，再從所有道具邊界推測格線與占用格數。";
       fitSource();renderSource();renderResult();updateUI();
+      await detect();
     };
     image.src=url;
   }
@@ -283,9 +341,9 @@
     if(!image.naturalWidth)return;
     const stage=$("sourceStage");
     const maxW=Math.max(220,stage.clientWidth-52),maxH=Math.max(220,stage.clientHeight-52);
-    state.scale=Math.min(2.5,maxW/image.naturalWidth,maxH/image.naturalHeight);
-    source.style.width=Math.round(image.naturalWidth*state.scale)+"px";
-    source.style.height=Math.round(image.naturalHeight*state.scale)+"px";
+    state.scale=Math.min(2.5,maxW/source.width,maxH/source.height);
+    source.style.width=Math.round(source.width*state.scale)+"px";
+    source.style.height=Math.round(source.height*state.scale)+"px";
   }
 
   async function detect(){
@@ -301,6 +359,8 @@
       state.boxes=decodeOutput(output,ratio,padX,padY,+$("confidence").value/100);
       state.selected=state.boxes.length?0:-1;
       inferGrid();syncGridInputs();updateFromGrid();
+      $("gridAutoSummary").textContent=`${state.grid.cols} 欄 × ${state.grid.rows} 列`;
+      $("gridAutoInfo").innerHTML=`已自動算出每格約 <b>${state.grid.cellW} × ${state.grid.cellH}</b> 像素，並完成 ${state.boxes.length} 件道具的格數換算。`;
       $("inferGridBtn").disabled=!state.boxes.length;
       $("arrangeBtn").disabled=!state.boxes.length;
     }catch(error){
@@ -423,35 +483,106 @@
 
   function arrange(){
     readGridInputs();
-    const cols=state.grid.cols,rows=state.grid.rows,occupied=Array.from({length:rows},()=>Array(cols).fill(false));
-    const strategy=arrangeStrategies[state.arrangeStrategy];
-    const sorted=[...state.boxes].sort(strategy.sort);
-    state.layout=[];state.overflow=[];
-    for(const box of sorted){
-      let spot=null;
-      if(strategy.scan==="column"){
-        outerColumn:for(let x=0;x<=cols-box.gridW;x++)for(let y=0;y<=rows-box.gridH;y++){
-          if(canPlace(occupied,x,y,box.gridW,box.gridH)){spot={x,y};break outerColumn}
-        }
-      }else{
-        outerRow:for(let y=0;y<=rows-box.gridH;y++)for(let x=0;x<=cols-box.gridW;x++){
-          if(canPlace(occupied,x,y,box.gridW,box.gridH)){spot={x,y};break outerRow}
-        }
+    const requested=$("arrangeType").value;
+    const direction=$("arrangeDirection").value;
+    const reserve=+$("reserveSpace").value||0;
+    const groupSame=$("groupSame").checked,groupLong=$("groupLong").checked;
+    let resultPack;
+    if(requested==="auto"){
+      const candidates=[];
+      const modes=["compact","holes","large","small","tall","wide","same","long","move","original"];
+      const directions=["tl","tr","bl","br"];
+      for(const mode of modes)for(const dir of directions){
+        candidates.push(packLayout(mode,dir,reserve,groupSame,groupLong));
       }
-      if(!spot){state.overflow.push(box);continue}
-      fill(occupied,spot.x,spot.y,box.gridW,box.gridH);
-      state.layout.push({box,x:spot.x,y:spot.y,w:box.gridW,h:box.gridH});
+      resultPack=candidates.sort((a,b)=>a.score-b.score)[0];
+      $("arrangeHint").textContent=`自動選中：${strategyNames[resultPack.mode]}／${directionName(resultPack.direction)}`;
+    }else{
+      resultPack=packLayout(requested,direction,reserve,groupSame,groupLong);
+      $("arrangeHint").textContent=`目前使用：${strategyNames[requested]}／${directionName(direction)}`;
     }
+    state.layout=resultPack.layout;state.overflow=resultPack.overflow;
+    $("arrangeMode").textContent=requested==="auto"?`自動：${strategyNames[resultPack.mode]}`:strategyNames[requested];
     renderSource();renderResult();updateUI();
   }
-  function nextArrangement(){
-    if(!state.boxes.length)return;
-    state.arrangeStrategy=(state.arrangeStrategy+1)%arrangeStrategies.length;
-    arrange();
-    const button=$("arrangeBtn"),name=arrangeStrategies[state.arrangeStrategy].name;
-    button.textContent=`已切換：${name}`;
-    window.setTimeout(()=>button.textContent="換一種排列",900);
+  function packLayout(mode,direction,reservePercent,groupSame,groupLong){
+    const cols=state.grid.cols,rows=state.grid.rows;
+    const reserved=Math.round(cols*rows*reservePercent/100);
+    let usableCols=cols,usableRows=rows;
+    if(reserved>0){
+      const colCut=Math.min(cols-1,Math.floor(reserved/rows));
+      usableCols=Math.max(1,cols-colCut);
+      const remain=reserved-colCut*rows;
+      if(remain>0)usableRows=Math.max(1,rows-Math.ceil(remain/usableCols));
+    }
+    const grid=Array.from({length:rows},()=>Array(cols).fill(true));
+    const xOffset=direction.includes("r")?cols-usableCols:0;
+    const yOffset=direction.includes("b")?rows-usableRows:0;
+    for(let y=yOffset;y<yOffset+usableRows;y++)for(let x=xOffset;x<xOffset+usableCols;x++)grid[y][x]=false;
+    const ordered=sortBoxes(mode,groupSame,groupLong);
+    const layout=[],overflow=[];
+    for(const box of ordered){
+      const spots=findSpots(grid,box.gridW,box.gridH,direction);
+      if(!spots.length){overflow.push(box);continue}
+      const spot=mode==="move"
+        ?spots.sort((a,b)=>moveDistance(a,box)-moveDistance(b,box))[0]
+        :spots[0];
+      fill(grid,spot.x,spot.y,box.gridW,box.gridH);
+      layout.push({box,x:spot.x,y:spot.y,w:box.gridW,h:box.gridH});
+    }
+    return{layout,overflow,mode,direction,score:scoreLayout(layout,overflow,grid,usableCols,usableRows)};
   }
+  function sortBoxes(mode,groupSame,groupLong){
+    const index=box=>state.boxes.indexOf(box);
+    const area=box=>box.gridW*box.gridH;
+    const aspect=box=>Math.max(box.gridW/box.gridH,box.gridH/box.gridW);
+    const comparators={
+      compact:(a,b)=>area(b)-area(a)||Math.max(b.gridW,b.gridH)-Math.max(a.gridW,a.gridH),
+      holes:(a,b)=>Math.max(b.gridW,b.gridH)-Math.max(a.gridW,a.gridH)||area(b)-area(a),
+      large:(a,b)=>area(b)-area(a),
+      small:(a,b)=>area(a)-area(b),
+      tall:(a,b)=>b.gridH-a.gridH||b.gridW-a.gridW,
+      wide:(a,b)=>b.gridW-a.gridW||b.gridH-a.gridH,
+      same:(a,b)=>area(b)-area(a)||b.gridW-a.gridW||b.gridH-a.gridH,
+      long:(a,b)=>aspect(b)-aspect(a)||area(b)-area(a),
+      move:(a,b)=>index(a)-index(b),
+      original:(a,b)=>index(a)-index(b)
+    };
+    return [...state.boxes].sort((a,b)=>{
+      if(groupLong){
+        const longDiff=(aspect(b)>=2?1:0)-(aspect(a)>=2?1:0);
+        if(longDiff)return longDiff;
+      }
+      if(groupSame){
+        const sizeA=`${a.gridW}x${a.gridH}`,sizeB=`${b.gridW}x${b.gridH}`;
+        if(sizeA!==sizeB)return area(b)-area(a)||sizeA.localeCompare(sizeB);
+      }
+      return(comparators[mode]||comparators.compact)(a,b)||index(a)-index(b);
+    });
+  }
+  function findSpots(grid,w,h,direction){
+    const rows=grid.length,cols=grid[0].length;
+    const xs=Array.from({length:Math.max(0,cols-w+1)},(_,i)=>i);
+    const ys=Array.from({length:Math.max(0,rows-h+1)},(_,i)=>i);
+    if(direction.includes("r"))xs.reverse();
+    if(direction.includes("b"))ys.reverse();
+    const spots=[];
+    for(const y of ys)for(const x of xs)if(canPlace(grid,x,y,w,h))spots.push({x,y});
+    return spots;
+  }
+  function moveDistance(spot,box){return Math.abs(spot.x-(box.gridX||0))+Math.abs(spot.y-(box.gridY||0))}
+  function scoreLayout(layout,overflow,grid,usableCols,usableRows){
+    if(!layout.length)return overflow.length*1e9;
+    const minX=Math.min(...layout.map(e=>e.x)),minY=Math.min(...layout.map(e=>e.y));
+    const maxX=Math.max(...layout.map(e=>e.x+e.w)),maxY=Math.max(...layout.map(e=>e.y+e.h));
+    const bounds=(maxX-minX)*(maxY-minY);
+    const used=layout.reduce((sum,e)=>sum+e.w*e.h,0);
+    const holes=Math.max(0,bounds-used);
+    const movement=layout.reduce((sum,e)=>sum+moveDistance(e,e.box),0);
+    const edgeWaste=usableCols*usableRows-used;
+    return overflow.length*1e9+holes*1e5+bounds*1e3+edgeWaste*10+movement;
+  }
+  function directionName(value){return({tl:"左上",tr:"右上",bl:"左下",br:"右下"})[value]||"左上"}
   function canPlace(grid,x,y,w,h){
     for(let yy=y;yy<y+h;yy++)for(let xx=x;xx<x+w;xx++)if(grid[yy][xx])return false;
     return true;
@@ -460,7 +591,11 @@
 
   function renderSource(){
     if(!image.naturalWidth)return;
-    sctx.clearRect(0,0,source.width,source.height);sctx.drawImage(image,0,0);
+    sctx.clearRect(0,0,source.width,source.height);
+    sctx.fillStyle="#08121b";sctx.fillRect(0,0,source.width,source.height);
+    sctx.drawImage(image,RULER_LEFT,RULER_TOP);
+    sctx.save();
+    sctx.translate(RULER_LEFT,RULER_TOP);
     drawGrid(sctx);
     state.boxes.forEach((box,index)=>{
       const color=palette[index%palette.length],selected=index===state.selected;
@@ -473,6 +608,8 @@
       sctx.fillStyle=selected?varColor("amber"):color;sctx.fillRect(box.x,box.y-17/state.scale,tw,17/state.scale);
       sctx.fillStyle="#061119";sctx.fillText(label,box.x+4/state.scale,box.y-4/state.scale);
     });
+    sctx.restore();
+    drawRulers(sctx);
   }
   function drawGrid(ctx){
     const g=state.grid;ctx.save();ctx.strokeStyle="rgba(53,212,199,.36)";ctx.lineWidth=Math.max(1,1/state.scale);
@@ -480,6 +617,32 @@
     for(let x=0;x<=g.cols;x++){const px=g.originX+x*g.cellW;ctx.moveTo(px,g.originY);ctx.lineTo(px,g.originY+g.rows*g.cellH)}
     for(let y=0;y<=g.rows;y++){const py=g.originY+y*g.cellH;ctx.moveTo(g.originX,py);ctx.lineTo(g.originX+g.cols*g.cellW,py)}
     ctx.stroke();ctx.restore();
+  }
+  function drawRulers(ctx){
+    const g=state.grid;
+    const fontSize=Math.max(10,12/state.scale);
+    const topY=RULER_TOP-5/state.scale;
+    const leftX=RULER_LEFT-7/state.scale;
+    ctx.save();
+    ctx.font=`700 ${fontSize}px Segoe UI`;
+    ctx.textAlign="center";ctx.textBaseline="bottom";
+    ctx.lineWidth=Math.max(2,3/state.scale);
+    ctx.strokeStyle="rgba(5,14,21,.94)";
+    ctx.fillStyle="#ffe16b";
+    for(let col=0;col<g.cols;col++){
+      const x=RULER_LEFT+g.originX+(col+.5)*g.cellW;
+      const text=String(col+1);
+      ctx.strokeText(text,x,topY);
+      ctx.fillText(text,x,topY);
+    }
+    ctx.textAlign="right";ctx.textBaseline="middle";
+    for(let row=0;row<g.rows;row++){
+      const y=RULER_TOP+g.originY+(row+.5)*g.cellH;
+      const text=String(row+1);
+      ctx.strokeText(text,leftX,y);
+      ctx.fillText(text,leftX,y);
+    }
+    ctx.restore();
   }
   function varColor(name){return name==="amber"?"#ffb84d":"#35d4c7"}
 
@@ -523,7 +686,6 @@
     const used=state.layout.reduce((sum,e)=>sum+e.w*e.h,0);
     $("usedCells").textContent=`${used} / ${state.grid.cols*state.grid.rows}`;
     $("overflowCount").textContent=state.overflow.length;
-    $("arrangeMode").textContent=arrangeStrategies[state.arrangeStrategy].name;
     updateItemList();updateSelection();
   }
   function updateItemList(){
@@ -549,7 +711,10 @@
 
   function point(e,canvas){
     const rect=canvas.getBoundingClientRect();
-    return{x:(e.clientX-rect.left)*canvas.width/rect.width,y:(e.clientY-rect.top)*canvas.height/rect.height};
+    return{
+      x:(e.clientX-rect.left)*canvas.width/rect.width-RULER_LEFT,
+      y:(e.clientY-rect.top)*canvas.height/rect.height-RULER_TOP
+    };
   }
   function hitSource(p){
     for(let i=state.boxes.length-1;i>=0;i--){const b=state.boxes[i];if(p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h)return i}
@@ -558,6 +723,7 @@
   source.onpointerdown=e=>{
     if(!image.naturalWidth)return;
     const p=point(e,source),index=hitSource(p);source.setPointerCapture(e.pointerId);state.start=p;
+    if(p.x<0||p.y<0||p.x>image.naturalWidth||p.y>image.naturalHeight)return;
     if(index>=0){state.selected=index;state.action="move";state.original={...state.boxes[index]}}
     else{
       state.selected=state.boxes.length;state.boxes.push({x:p.x,y:p.y,w:1,h:1,confidence:0,manual:true,id:`manual-${Date.now()}`});
@@ -568,8 +734,8 @@
   source.onpointermove=e=>{
     if(!state.action)return;
     const p=point(e,source),box=state.boxes[state.selected],dx=p.x-state.start.x,dy=p.y-state.start.y;
-    if(state.action==="move"){box.x=Math.max(0,Math.min(source.width-box.w,state.original.x+dx));box.y=Math.max(0,Math.min(source.height-box.h,state.original.y+dy))}
-    else{box.w=Math.max(1,p.x-box.x);box.h=Math.max(1,p.y-box.y)}
+    if(state.action==="move"){box.x=Math.max(0,Math.min(image.naturalWidth-box.w,state.original.x+dx));box.y=Math.max(0,Math.min(image.naturalHeight-box.h,state.original.y+dy))}
+    else{box.w=Math.max(1,Math.min(image.naturalWidth-box.x,p.x-box.x));box.h=Math.max(1,Math.min(image.naturalHeight-box.y,p.y-box.y))}
     box.gridX=Math.max(0,Math.round((box.x-state.grid.originX)/state.grid.cellW));
     box.gridY=Math.max(0,Math.round((box.y-state.grid.originY)/state.grid.cellH));
     box.gridW=Math.max(1,Math.round(box.w/state.grid.cellW));box.gridH=Math.max(1,Math.round(box.h/state.grid.cellH));
@@ -612,3 +778,4 @@
 </script>
 </body>
 </html>
+
