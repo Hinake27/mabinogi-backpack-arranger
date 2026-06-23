@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
@@ -120,7 +120,7 @@
   <header>
     <div>
       <h1>新瑪奇背包排列工具</h1>
-      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.23-r14</p>
+      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.23-r16</p>
     </div>
     <div class="header-actions">
       <div class="status"><span class="dot" id="modelDot"></span><span id="modelStatus">模型尚未載入</span></div>
@@ -386,7 +386,7 @@
       state.selected=state.boxes.length?0:-1;
       inferGrid();syncGridInputs();computeVisualFeatures();updateFromGrid();
       $("gridAutoSummary").textContent=`${state.grid.cols} 欄 × ${state.grid.rows} 列`;
-      $("gridAutoInfo").innerHTML=`使用 <b>${state.gridSource||"自動分析"}</b> 算出每格約 <b>${state.grid.cellW} × ${state.grid.cellH}</b> 像素，並完成 ${state.boxes.length} 件道具的格數換算。`;
+      updateGridInfo();
       $("inferGridBtn").disabled=!state.boxes.length;
       $("arrangeBtn").disabled=!state.boxes.length;
     }catch(error){
@@ -445,10 +445,19 @@
     const widths=state.boxes.map(b=>b.w),heights=state.boxes.map(b=>b.h);
     const boxCellW=estimateCell(widths,image.naturalWidth);
     const boxCellH=estimateCell(heights,image.naturalHeight);
-    state.grid.cellW=pixelGrid.x.confident?pixelGrid.x.period:boxCellW;
-    state.grid.cellH=pixelGrid.y.confident?pixelGrid.y.period:boxCellH;
-    state.grid.originX=pixelGrid.x.confident?pixelGrid.x.origin:estimatePhase(state.boxes.flatMap(b=>[b.x,b.x+b.w]),state.grid.cellW);
-    state.grid.originY=pixelGrid.y.confident?pixelGrid.y.origin:estimatePhase(state.boxes.flatMap(b=>[b.y,b.y+b.h]),state.grid.cellH);
+    state.grid.cellW=chooseCellPeriod(pixelGrid.x,boxCellW,widths);
+    state.grid.cellH=chooseCellPeriod(pixelGrid.y,boxCellH,heights);
+    const cellRatio=Math.max(state.grid.cellW,state.grid.cellH)/Math.min(state.grid.cellW,state.grid.cellH);
+    const boxRatio=Math.max(boxCellW,boxCellH)/Math.min(boxCellW,boxCellH);
+    if(cellRatio>1.13&&boxRatio<1.1){
+      const shared=Math.round(((boxCellW+boxCellH)/2)*10)/10;
+      state.grid.cellW=shared;
+      state.grid.cellH=shared;
+    }
+    const xEdges=state.boxes.flatMap(b=>[b.x,b.x+b.w]);
+    const yEdges=state.boxes.flatMap(b=>[b.y,b.y+b.h]);
+    state.grid.originX=chooseGridOrigin(pixelGrid.x,xEdges,state.grid.cellW,image.naturalWidth);
+    state.grid.originY=chooseGridOrigin(pixelGrid.y,yEdges,state.grid.cellH,image.naturalHeight);
     state.grid.cols=Math.max(1,Math.round((image.naturalWidth-state.grid.originX)/state.grid.cellW));
     state.grid.rows=Math.max(1,Math.round((image.naturalHeight-state.grid.originY)/state.grid.cellH));
     if(state.grid.cols>60)state.grid.cols=Math.max(1,Math.round(image.naturalWidth/state.grid.cellW));
@@ -560,6 +569,42 @@
     return Math.round(best.cell*10)/10;
   }
 
+  function chooseCellPeriod(pixelAxis,boxCell,values){
+    if(!pixelAxis.confident)return boxCell;
+    const candidates=[pixelAxis.period,boxCell,pixelAxis.period/2,pixelAxis.period*2]
+      .filter(cell=>cell>=8&&cell<=100)
+      .map(cell=>Math.round(cell*10)/10)
+      .filter((cell,index,array)=>array.indexOf(cell)===index);
+    let best={cell:boxCell,score:Infinity};
+    for(const cell of candidates){
+      const fit=cellFitScore(values,cell);
+      const boxDistance=Math.abs(cell-boxCell)/Math.max(1,boxCell);
+      const pixelDistance=Math.abs(cell-pixelAxis.period)/Math.max(1,pixelAxis.period);
+      const score=fit+boxDistance*.12+pixelDistance*.035;
+      if(score<best.score)best={cell,score};
+    }
+    const disagreement=Math.abs(pixelAxis.period-boxCell)/Math.max(1,boxCell);
+    if(disagreement>.14){
+      const pixelFit=cellFitScore(values,pixelAxis.period);
+      const boxFit=cellFitScore(values,boxCell);
+      if(boxFit<=pixelFit+.08)return boxCell;
+    }
+    return best.cell;
+  }
+
+  function cellFitScore(values,cell){
+    const errors=values
+      .filter(value=>value>=cell*.55)
+      .map(value=>{
+        const units=Math.max(1,Math.min(12,Math.round(value/cell)));
+        return Math.abs(value/cell-units);
+      })
+      .sort((a,b)=>a-b);
+    if(!errors.length)return 1;
+    const keep=Math.max(1,Math.ceil(errors.length*.8));
+    return errors.slice(0,keep).reduce((sum,value)=>sum+value,0)/keep;
+  }
+
   function estimatePhase(edges,cell){
     let best={phase:0,score:Infinity};
     for(let phase=0;phase<cell;phase+=.25){
@@ -571,6 +616,30 @@
       if(score<best.score)best={phase,score};
     }
     return Math.round(best.phase*10)/10;
+  }
+
+  function chooseGridOrigin(pixelAxis,edges,cell,size){
+    const boxPhase=estimatePhase(edges,cell);
+    if(!pixelAxis.confident)return boxPhase;
+    const candidates=[pixelAxis.origin,boxPhase,0]
+      .map(value=>Math.round(value*10)/10)
+      .filter((value,index,array)=>array.indexOf(value)===index);
+    let best={origin:boxPhase,score:Infinity};
+    for(const origin of candidates){
+      let edgeError=0;
+      for(const edge of edges){
+        const position=(edge-origin)/cell;
+        edgeError+=Math.abs(position-Math.round(position));
+      }
+      edgeError/=Math.max(1,edges.length);
+      const count=Math.max(1,Math.round((size-origin)/cell));
+      const farEdge=origin+count*cell;
+      const boundaryError=Math.min(Math.abs(origin),Math.abs(origin-cell))/cell+
+        Math.abs(farEdge-size)/cell;
+      const score=edgeError*4+boundaryError*.35+(origin>cell*.75?.25:0);
+      if(score<best.score)best={origin,score};
+    }
+    return best.origin;
   }
 
   function computeVisualFeatures(){
@@ -683,19 +752,75 @@
     state.grid.originX=Math.max(0,+$("originX").value||0);state.grid.originY=Math.max(0,+$("originY").value||0);
   }
   function updateFromGrid(){
-    state.boxes.forEach(box=>{
-      const left=Math.round((box.x-state.grid.originX)/state.grid.cellW);
-      const top=Math.round((box.y-state.grid.originY)/state.grid.cellH);
-      const right=Math.round((box.x+box.w-state.grid.originX)/state.grid.cellW);
-      const bottom=Math.round((box.y+box.h-state.grid.originY)/state.grid.cellH);
-      box.gridX=Math.max(0,left);
-      box.gridY=Math.max(0,top);
-      if(!box.sizeLocked){
-        box.gridW=Math.max(1,right-left);
-        box.gridH=Math.max(1,bottom-top);
-      }
-    });
+    snapBoxesToGrid();
+    updateGridInfo();
     arrange();
+  }
+
+  function updateGridInfo(){
+    if(!state.boxes.length)return;
+    const warning=state.gridWarning
+      ?`<br><b style="color:#ffb84d">注意：${state.gridWarning}</b>`
+      :"";
+    $("gridAutoInfo").innerHTML=`使用 <b>${state.gridSource||"自動分析"}</b> 算出每格約 <b>${state.grid.cellW} × ${state.grid.cellH}</b> 像素，並完成 ${state.boxes.length} 件道具的格數換算。${warning}`;
+  }
+
+  function snapBoxesToGrid(){
+    const g=state.grid;
+    const occupied=Array.from({length:g.rows},()=>Array(g.cols).fill(false));
+    const ordered=[...state.boxes].sort((a,b)=>
+      (b.confidence||0)-(a.confidence||0) || b.w*b.h-a.w*a.h
+    );
+    for(const box of ordered){
+      const rawW=box.w/g.cellW,rawH=box.h/g.cellH;
+      const widths=box.sizeLocked?[box.gridW]:nearbyGridSizes(rawW,g.cols);
+      const heights=box.sizeLocked?[box.gridH]:nearbyGridSizes(rawH,g.rows);
+      const centerX=(box.x+box.w/2-g.originX)/g.cellW;
+      const centerY=(box.y+box.h/2-g.originY)/g.cellH;
+      let best=null;
+      for(const w of widths)for(const h of heights){
+        const baseX=Math.round(centerX-w/2),baseY=Math.round(centerY-h/2);
+        for(let y=baseY-1;y<=baseY+1;y++)for(let x=baseX-1;x<=baseX+1;x++){
+          if(x<0||y<0||x+w>g.cols||y+h>g.rows)continue;
+          let overlap=0;
+          for(let yy=y;yy<y+h;yy++)for(let xx=x;xx<x+w;xx++)if(occupied[yy][xx])overlap++;
+          const sizeError=Math.abs(rawW-w)+Math.abs(rawH-h);
+          const centerError=Math.abs(centerX-(x+w/2))+Math.abs(centerY-(y+h/2));
+          const score=sizeError*4+centerError*2+overlap*30;
+          if(!best||score<best.score)best={x,y,w,h,score,overlap,sizeError};
+        }
+      }
+      if(!best){
+        const w=Math.max(1,Math.min(g.cols,Math.round(rawW)));
+        const h=Math.max(1,Math.min(g.rows,Math.round(rawH)));
+        best={
+          x:Math.max(0,Math.min(g.cols-w,Math.round(centerX-w/2))),
+          y:Math.max(0,Math.min(g.rows-h,Math.round(centerY-h/2))),
+          w,h,score:999,overlap:0,sizeError:0
+        };
+      }
+      box.gridX=best.x;box.gridY=best.y;
+      if(!box.sizeLocked){box.gridW=best.w;box.gridH=best.h}
+      box.gridSnapWarning=best.overlap>0||best.sizeError>.7;
+      for(let yy=best.y;yy<best.y+best.h;yy++)for(let xx=best.x;xx<best.x+best.w;xx++)occupied[yy][xx]=true;
+    }
+    const used=state.boxes.reduce((sum,b)=>sum+b.gridW*b.gridH,0);
+    const warnings=state.boxes.filter(b=>b.gridSnapWarning).length;
+    const aspectDiff=Math.abs(g.cellW-g.cellH)/Math.max(g.cellW,g.cellH);
+    state.gridWarning=used>g.cols*g.rows
+      ?`道具占用 ${used} 格，超過背包 ${g.cols*g.rows} 格；請檢查錯框或格線。`
+      :warnings
+        ?`${warnings} 件道具的框線偏離格線，已自動貼齊；建議抽查標示尺寸。`
+        :aspectDiff>.12
+          ?"水平與垂直格距差異較大，圖片可能有透視變形；手機照片建議先裁正。"
+          :"";
+  }
+
+  function nearbyGridSizes(raw,max){
+    const rounded=Math.max(1,Math.min(max,Math.round(raw)));
+    return [...new Set([
+      Math.floor(raw),rounded,Math.ceil(raw),rounded-1,rounded+1
+    ].map(v=>Math.max(1,Math.min(max,v))))];
   }
 
   function arrange(){
@@ -1129,4 +1254,3 @@
 </script>
 </body>
 </html>
-
