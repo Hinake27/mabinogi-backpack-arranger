@@ -64,6 +64,8 @@
     .grid-form{display:grid;grid-template-columns:1fr 1fr;gap:9px}
     label{display:grid;gap:6px;color:var(--muted);font-size:11px}
     label b{color:var(--text);font-weight:600}
+    label.check{display:flex;align-items:center;gap:8px}
+    label.check input{width:16px;height:16px;accent-color:var(--cyan)}
     .full{grid-column:1/-1}
     .info{
       border:1px solid var(--line);border-radius:10px;background:#09151f;padding:11px 12px;
@@ -120,7 +122,7 @@
   <header>
     <div>
       <h1>新瑪奇背包排列工具</h1>
-      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.23-r16</p>
+      <p>圖片只在瀏覽器本機處理；可上傳或按 Ctrl+V 貼上截圖。版本 2026.06.23-r17</p>
     </div>
     <div class="header-actions">
       <div class="status"><span class="dot" id="modelDot"></span><span id="modelStatus">模型尚未載入</span></div>
@@ -136,8 +138,8 @@
       <div class="stage" id="sourceStage">
         <div class="empty" id="sourceEmpty">
           <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
-          <strong>上傳一張完整背包截圖</strong>
-          建議只保留背包格子區域。載入後，模型會自動框出每件道具。
+          <strong>上傳或貼上一張背包截圖</strong>
+          可選擇圖片，也可截圖後直接按 Ctrl+V。工具會自動尋找主要背包區域。
         </div>
         <canvas id="sourceCanvas" class="hidden"></canvas>
       </div>
@@ -149,6 +151,8 @@
         <div class="section">
           <div class="section-title"><strong>模型設定</strong><span id="confidenceText">信心 30%</span></div>
           <label>辨識信心門檻<input id="confidence" type="range" min="10" max="90" value="30"></label>
+          <label class="check"><input id="autoRegion" type="checkbox" checked> 自動排除背包外的介面與裝備</label>
+          <div class="info" id="regionInfo">完整畫面也可以使用；工具會保留最大且符合格線的道具群組。</div>
           <div class="info">數值越低越不容易漏掉道具，但可能增加錯框。一般建議從 <b>30%</b> 開始。</div>
         </div>
 
@@ -280,8 +284,9 @@
   const RULER_LEFT = 34, RULER_TOP = 28;
   const palette = ["#35d4c7","#ffb84d","#5caeff","#ff7c92","#a98cff","#7ee081","#e8d35f","#f58e5b"];
   const state = {
-    session:null,file:null,boxes:[],selected:-1,layout:[],overflow:[],
+    session:null,file:null,rawBoxes:[],boxes:[],excludedBoxes:[],selected:-1,layout:[],overflow:[],
     scale:1,action:null,start:null,original:null,variantKey:"",variants:[],
+    regionActive:false,region:null,
     grid:{cols:10,rows:8,cellW:32,cellH:32,originX:0,originY:0}
   };
   const strategyNames={
@@ -302,6 +307,11 @@
   $("arrangeBtn").onclick = arrange;
   $("inferGridBtn").onclick = () => { inferGrid(); syncGridInputs(); updateFromGrid(); };
   $("confidence").oninput = () => $("confidenceText").textContent = `信心 ${$("confidence").value}%`;
+  $("autoRegion").onchange = () => {
+    applyRegionFilter();
+    state.selected=state.boxes.length?0:-1;
+    inferGrid();syncGridInputs();computeVisualFeatures();updateFromGrid();
+  };
   $("deleteBtn").onclick = deleteSelected;
   $("snapBtn").onclick = snapSelected;
   $("itemW").onchange = applySelectedSize;
@@ -327,6 +337,14 @@
     arrange();
   }
   window.addEventListener("resize", fitSource);
+  window.addEventListener("paste",event=>{
+    const item=[...(event.clipboardData?.items||[])].find(entry=>entry.type.startsWith("image/"));
+    if(!item)return;
+    const blob=item.getAsFile();if(!blob)return;
+    event.preventDefault();
+    const extension=(blob.type.split("/")[1]||"png").replace("jpeg","jpg");
+    loadImage(new File([blob],`剪貼簿截圖-${Date.now()}.${extension}`,{type:blob.type}));
+  });
 
   async function ensureModel(){
     if(state.session) return state.session;
@@ -350,7 +368,8 @@
     const url = URL.createObjectURL(file);
     image.onload = async () => {
       URL.revokeObjectURL(url);
-      state.file=file;state.boxes=[];state.layout=[];state.overflow=[];state.selected=-1;
+      state.file=file;state.rawBoxes=[];state.boxes=[];state.excludedBoxes=[];state.layout=[];state.overflow=[];state.selected=-1;
+      state.regionActive=false;state.region=null;
       source.width=image.naturalWidth+RULER_LEFT;source.height=image.naturalHeight+RULER_TOP;
       $("sourceCanvas").classList.remove("hidden");$("sourceEmpty").classList.add("hidden");
       $("imageInfo").textContent=`${file.name} · ${image.naturalWidth}×${image.naturalHeight}`;
@@ -382,7 +401,8 @@
       const feeds={};feeds[session.inputNames[0]]=tensor;
       const outputs=await session.run(feeds);
       const output=outputs[session.outputNames[0]];
-      state.boxes=decodeOutput(output,ratio,padX,padY,+$("confidence").value/100);
+      state.rawBoxes=decodeOutput(output,ratio,padX,padY,+$("confidence").value/100);
+      applyRegionFilter();
       state.selected=state.boxes.length?0:-1;
       inferGrid();syncGridInputs();computeVisualFeatures();updateFromGrid();
       $("gridAutoSummary").textContent=`${state.grid.cols} 欄 × ${state.grid.rows} 列`;
@@ -439,6 +459,87 @@
     return intersection/(a.w*a.h+b.w*b.h-intersection||1);
   }
 
+  function applyRegionFilter(){
+    const raw=state.rawBoxes;
+    state.regionActive=false;state.region=null;state.excludedBoxes=[];
+    if(!$("autoRegion").checked||raw.length<4){
+      state.boxes=[...raw];
+      $("regionInfo").textContent=raw.length?"已保留全部辨識框。":"等待辨識圖片。";
+      return;
+    }
+    const cellW=estimateCell(raw.map(box=>box.w),image.naturalWidth);
+    const cellH=estimateCell(raw.map(box=>box.h),image.naturalHeight);
+    const phaseX=estimatePhase(raw.flatMap(box=>[box.x,box.x+box.w]),cellW);
+    const phaseY=estimatePhase(raw.flatMap(box=>[box.y,box.y+box.h]),cellH);
+    const aligned=raw.filter(box=>gridAlignmentError(box,phaseX,phaseY,cellW,cellH)<=.18);
+    const pool=aligned.length>=Math.max(3,Math.ceil(raw.length*.35))?aligned:raw;
+    const gap=Math.max(6,Math.min(cellW,cellH)*.65);
+    const components=[];
+    const pending=new Set(pool);
+    while(pending.size){
+      const seed=pending.values().next().value,component=[],queue=[seed];
+      pending.delete(seed);
+      while(queue.length){
+        const current=queue.pop();component.push(current);
+        for(const candidate of [...pending]){
+          if(boxGap(current,candidate)<=gap){
+            pending.delete(candidate);queue.push(candidate);
+          }
+        }
+      }
+      components.push(component);
+    }
+    components.sort((a,b)=>regionComponentScore(b)-regionComponentScore(a));
+    const primary=components[0]||pool;
+    const minX=Math.min(...primary.map(box=>box.x));
+    const minY=Math.min(...primary.map(box=>box.y));
+    const maxX=Math.max(...primary.map(box=>box.x+box.w));
+    const maxY=Math.max(...primary.map(box=>box.y+box.h));
+    const margin=Math.min(cellW,cellH)*.4;
+    const kept=raw.filter(box=>{
+      const cx=box.x+box.w/2,cy=box.y+box.h/2;
+      const inside=cx>=minX-margin&&cx<=maxX+margin&&cy>=minY-margin&&cy<=maxY+margin;
+      return inside&&gridAlignmentError(box,phaseX,phaseY,cellW,cellH)<=.32;
+    });
+    if(kept.length<3||kept.length<raw.length*.45){
+      state.boxes=[...raw];
+      $("regionInfo").textContent="無法可靠分離背包區域，已保留全部辨識框，可手動刪除錯框。";
+      return;
+    }
+    state.boxes=kept.sort((a,b)=>a.y-b.y||a.x-b.x);
+    state.excludedBoxes=raw.filter(box=>!kept.includes(box));
+    state.regionActive=state.excludedBoxes.length>0;
+    state.region={minX,minY,maxX,maxY,cellW,cellH};
+    $("regionInfo").innerHTML=state.excludedBoxes.length
+      ?`已鎖定主要背包區域，排除 <b>${state.excludedBoxes.length}</b> 個背包外誤框。`
+      :"所有辨識框都位於主要背包區域。";
+  }
+
+  function gridAlignmentError(box,phaseX,phaseY,cellW,cellH){
+    const error=(value,phase,cell)=>{
+      const position=(value-phase)/cell;
+      return Math.abs(position-Math.round(position));
+    };
+    return(
+      error(box.x,phaseX,cellW)+error(box.x+box.w,phaseX,cellW)+
+      error(box.y,phaseY,cellH)+error(box.y+box.h,phaseY,cellH)
+    )/4;
+  }
+
+  function boxGap(a,b){
+    const dx=Math.max(0,a.x-(b.x+b.w),b.x-(a.x+a.w));
+    const dy=Math.max(0,a.y-(b.y+b.h),b.y-(a.y+a.h));
+    return Math.hypot(dx,dy);
+  }
+
+  function regionComponentScore(component){
+    const minX=Math.min(...component.map(box=>box.x)),minY=Math.min(...component.map(box=>box.y));
+    const maxX=Math.max(...component.map(box=>box.x+box.w)),maxY=Math.max(...component.map(box=>box.y+box.h));
+    const bounds=Math.max(1,(maxX-minX)*(maxY-minY));
+    const area=component.reduce((sum,box)=>sum+box.w*box.h,0);
+    return component.length*10000+Math.min(1,area/bounds)*1000;
+  }
+
   function inferGrid(){
     if(!state.boxes.length)return;
     const pixelGrid=detectGridFromImage();
@@ -458,11 +559,26 @@
     const yEdges=state.boxes.flatMap(b=>[b.y,b.y+b.h]);
     state.grid.originX=chooseGridOrigin(pixelGrid.x,xEdges,state.grid.cellW,image.naturalWidth);
     state.grid.originY=chooseGridOrigin(pixelGrid.y,yEdges,state.grid.cellH,image.naturalHeight);
-    state.grid.cols=Math.max(1,Math.round((image.naturalWidth-state.grid.originX)/state.grid.cellW));
-    state.grid.rows=Math.max(1,Math.round((image.naturalHeight-state.grid.originY)/state.grid.cellH));
+    if(state.regionActive){
+      const minX=Math.min(...state.boxes.map(box=>box.x)),minY=Math.min(...state.boxes.map(box=>box.y));
+      const maxX=Math.max(...state.boxes.map(box=>box.x+box.w)),maxY=Math.max(...state.boxes.map(box=>box.y+box.h));
+      state.grid.originX=anchorGridOrigin(state.grid.originX,minX,state.grid.cellW);
+      state.grid.originY=anchorGridOrigin(state.grid.originY,minY,state.grid.cellH);
+      const right=image.naturalWidth-maxX<state.grid.cellW*.55?image.naturalWidth:maxX;
+      const bottom=image.naturalHeight-maxY<state.grid.cellH*.55?image.naturalHeight:maxY;
+      state.grid.cols=Math.max(1,Math.round((right-state.grid.originX)/state.grid.cellW));
+      state.grid.rows=Math.max(1,Math.round((bottom-state.grid.originY)/state.grid.cellH));
+    }else{
+      state.grid.cols=Math.max(1,Math.round((image.naturalWidth-state.grid.originX)/state.grid.cellW));
+      state.grid.rows=Math.max(1,Math.round((image.naturalHeight-state.grid.originY)/state.grid.cellH));
+    }
     if(state.grid.cols>60)state.grid.cols=Math.max(1,Math.round(image.naturalWidth/state.grid.cellW));
     if(state.grid.rows>60)state.grid.rows=Math.max(1,Math.round(image.naturalHeight/state.grid.cellH));
     state.gridSource=pixelGrid.x.confident&&pixelGrid.y.confident?"圖片格線":"道具框輔助";
+  }
+
+  function anchorGridOrigin(phase,minEdge,cell){
+    return Math.round((phase+Math.round((minEdge-phase)/cell)*cell)*10)/10;
   }
 
   function detectGridFromImage(){
@@ -1202,7 +1318,8 @@
     if(p.x<0||p.y<0||p.x>image.naturalWidth||p.y>image.naturalHeight)return;
     if(index>=0){state.selected=index;state.action="move";state.original={...state.boxes[index]}}
     else{
-      state.selected=state.boxes.length;state.boxes.push({x:p.x,y:p.y,w:1,h:1,confidence:0,manual:true,id:`manual-${Date.now()}`});
+      const manual={x:p.x,y:p.y,w:1,h:1,confidence:0,manual:true,id:`manual-${Date.now()}`};
+      state.selected=state.boxes.length;state.boxes.push(manual);state.rawBoxes.push(manual);
       state.action="draw";state.original=null;
     }
     renderSource();updateUI();
@@ -1245,7 +1362,9 @@
   }
   function deleteSelected(){
     if(state.selected<0)return;
-    state.boxes.splice(state.selected,1);state.selected=Math.min(state.selected,state.boxes.length-1);arrange();
+    const [removed]=state.boxes.splice(state.selected,1);
+    state.rawBoxes=state.rawBoxes.filter(box=>box!==removed);
+    state.selected=Math.min(state.selected,state.boxes.length-1);arrange();
   }
 
   ensureModel().catch(()=>{});
