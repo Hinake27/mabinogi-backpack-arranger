@@ -120,7 +120,7 @@
   <header>
     <div>
       <h1>新瑪奇背包排列工具</h1>
-      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.23-r12</p>
+      <p>圖片只在瀏覽器本機處理；辨識、修正與排列都不會操作遊戲。版本 2026.06.23-r14</p>
     </div>
     <div class="header-actions">
       <div class="status"><span class="dot" id="modelDot"></span><span id="modelStatus">模型尚未載入</span></div>
@@ -227,8 +227,22 @@
         <div class="toggle-row">
           <label><input id="groupSame" type="checkbox">同尺寸集中</label>
           <label><input id="groupLong" type="checkbox">長條道具集中</label>
+          <label><input id="groupIdentical" type="checkbox">同款式集中</label>
+          <label><input id="groupVisual" type="checkbox">相似造型集中</label>
           <span id="arrangeHint">會嘗試多種組合並選出最佳結果。</span>
         </div>
+        <label>分區模式
+          <select id="zoneMode">
+            <option value="none">不分區</option>
+            <option value="color">同顏色分區</option>
+            <option value="identical">同款式分區</option>
+            <option value="visual">相似造型分區</option>
+            <option value="combined">顏色＋造型綜合分區</option>
+          </select>
+        </label>
+        <label class="range-line"><span>造型相似度 <b id="visualText">嚴格</b></span>
+          <input id="visualSimilarity" type="range" min="0" max="100" step="5" value="25">
+        </label>
       </div>
       <div class="result-wrap">
         <div class="result-shell">
@@ -295,10 +309,15 @@
   ["cols","rows","cellW","cellH","originX","originY"].forEach(id => {
     $(id).onchange = () => { readGridInputs(); updateFromGrid(); };
   });
-  ["arrangeType","arrangeDirection","groupSame","groupLong"].forEach(id=>$(id).onchange=resetArrangementVariants);
+  ["arrangeType","arrangeDirection","groupSame","groupLong","groupIdentical","groupVisual","zoneMode"].forEach(id=>$(id).onchange=resetArrangementVariants);
   $("arrangementVariation").oninput=()=>{
     $("variationText").textContent=`${$("arrangementVariation").value}%`;
     arrange();
+  };
+  $("visualSimilarity").oninput=()=>{
+    const value=+$("visualSimilarity").value;
+    $("visualText").textContent=value<34?"嚴格":value<67?"中等":"寬鬆";
+    resetArrangementVariants();
   };
   function resetArrangementVariants(){
     state.variantKey="";
@@ -365,7 +384,7 @@
       const output=outputs[session.outputNames[0]];
       state.boxes=decodeOutput(output,ratio,padX,padY,+$("confidence").value/100);
       state.selected=state.boxes.length?0:-1;
-      inferGrid();syncGridInputs();updateFromGrid();
+      inferGrid();syncGridInputs();computeVisualFeatures();updateFromGrid();
       $("gridAutoSummary").textContent=`${state.grid.cols} 欄 × ${state.grid.rows} 列`;
       $("gridAutoInfo").innerHTML=`使用 <b>${state.gridSource||"自動分析"}</b> 算出每格約 <b>${state.grid.cellW} × ${state.grid.cellH}</b> 像素，並完成 ${state.boxes.length} 件道具的格數換算。`;
       $("inferGridBtn").disabled=!state.boxes.length;
@@ -554,6 +573,107 @@
     return Math.round(best.phase*10)/10;
   }
 
+  function computeVisualFeatures(){
+    if(!image.naturalWidth)return;
+    const canvas=document.createElement("canvas"),ctx=canvas.getContext("2d",{willReadFrequently:true});
+    canvas.width=16;canvas.height=16;
+    for(const box of state.boxes){
+      ctx.clearRect(0,0,16,16);
+      ctx.drawImage(image,box.x,box.y,box.w,box.h,0,0,16,16);
+      const data=ctx.getImageData(0,0,16,16).data,feature=[];
+      for(let by=0;by<4;by++)for(let bx=0;bx<4;bx++){
+        let r=0,g=0,b=0,l=0,edge=0,count=0;
+        for(let y=by*4;y<by*4+4;y++)for(let x=bx*4;x<bx*4+4;x++){
+          const i=(y*16+x)*4,lum=(data[i]*.299+data[i+1]*.587+data[i+2]*.114)/255;
+          r+=data[i]/255;g+=data[i+1]/255;b+=data[i+2]/255;l+=lum;count++;
+          if(x>0){
+            const j=(y*16+x-1)*4,prev=(data[j]*.299+data[j+1]*.587+data[j+2]*.114)/255;
+            edge+=Math.abs(lum-prev);
+          }
+          if(y>0){
+            const j=((y-1)*16+x)*4,prev=(data[j]*.299+data[j+1]*.587+data[j+2]*.114)/255;
+            edge+=Math.abs(lum-prev);
+          }
+        }
+        feature.push(r/count,g/count,b/count,l/count,edge/(count*2));
+      }
+      box.visualFeature=feature;
+      box.visualRank=feature.reduce((sum,value,index)=>sum+value*(index+1),0);
+      let totalR=0,totalG=0,totalB=0;
+      for(let i=0;i<feature.length;i+=5){totalR+=feature[i];totalG+=feature[i+1];totalB+=feature[i+2]}
+      const count=feature.length/5;
+      box.averageColor=[totalR/count,totalG/count,totalB/count];
+      box.colorGroup=colorBucket(box.averageColor);
+    }
+    state.variantKey="";
+  }
+  function colorBucket(color){
+    const [r,g,b]=color,max=Math.max(r,g,b),min=Math.min(r,g,b),delta=max-min;
+    const light=(max+min)/2;
+    if(light<.18)return 0;
+    if(light>.78&&delta<.12)return 1;
+    if(delta<.09)return 2;
+    let hue=0;
+    if(max===r)hue=((g-b)/delta+6)%6;
+    else if(max===g)hue=(b-r)/delta+2;
+    else hue=(r-g)/delta+4;
+    return 3+Math.floor((hue*60+15)%360/45);
+  }
+  function visualDistance(a,b){
+    if(!a||!b||a.length!==b.length)return 999;
+    let sum=0;
+    for(let i=0;i<a.length;i++){
+      const weight=i%5===4?1.35:1;
+      const delta=(a[i]-b[i])*weight;
+      sum+=delta*delta;
+    }
+    return Math.sqrt(sum/a.length);
+  }
+  function assignVisualGroups(identical,visual,similarity){
+    if(!identical&&!visual){
+      state.boxes.forEach((box,index)=>box.visualGroup=index);
+      return;
+    }
+    const threshold=(identical&&!visual) ? .055 : .08+(similarity/100)*.20;
+    const groups=[];
+    for(const box of state.boxes){
+      let best=-1,bestDistance=Infinity;
+      groups.forEach((group,index)=>{
+        const distance=visualDistance(box.visualFeature,group.feature);
+        if(distance<bestDistance){bestDistance=distance;best=index}
+      });
+      if(best>=0&&bestDistance<=threshold){
+        box.visualGroup=best;
+        groups[best].members.push(box);
+      }else{
+        box.visualGroup=groups.length;
+        groups.push({feature:box.visualFeature,members:[box]});
+      }
+    }
+  }
+  function assignZoneGroups(mode,similarity){
+    if(mode==="none"){
+      state.boxes.forEach((box,index)=>box.zoneGroup=index);
+      return;
+    }
+    if(mode==="color"){
+      state.boxes.forEach(box=>box.zoneGroup=box.colorGroup??0);
+      return;
+    }
+    if(mode==="identical"||mode==="visual"){
+      assignVisualGroups(mode==="identical",mode==="visual",similarity);
+      state.boxes.forEach(box=>box.zoneGroup=box.visualGroup);
+      return;
+    }
+    assignVisualGroups(false,true,similarity);
+    const keys=new Map();
+    state.boxes.forEach(box=>{
+      const key=`${box.colorGroup??0}:${box.visualGroup??0}`;
+      if(!keys.has(key))keys.set(key,keys.size);
+      box.zoneGroup=keys.get(key);
+    });
+  }
+
   function syncGridInputs(){
     for(const key of ["cols","rows","cellW","cellH","originX","originY"])$(key).value=state.grid[key];
   }
@@ -584,13 +704,18 @@
     const direction=$("arrangeDirection").value;
     const variation=+$("arrangementVariation").value||0;
     const groupSame=$("groupSame").checked,groupLong=$("groupLong").checked;
+    const groupIdentical=$("groupIdentical").checked,groupVisual=$("groupVisual").checked;
+    const visualSimilarity=+$("visualSimilarity").value||25;
+    const zoneMode=$("zoneMode").value;
     const variantKey=[
-      requested,direction,groupSame,groupLong,state.grid.cols,state.grid.rows,
+      requested,direction,groupSame,groupLong,groupIdentical,groupVisual,visualSimilarity,zoneMode,state.grid.cols,state.grid.rows,
       ...state.boxes.map(b=>`${b.gridX},${b.gridY},${b.gridW},${b.gridH}`)
     ].join("|");
     if(state.variantKey!==variantKey){
       state.variantKey=variantKey;
-      state.variants=generateLayoutVariants(requested,direction,groupSame,groupLong);
+      assignVisualGroups(groupIdentical,groupVisual,visualSimilarity);
+      assignZoneGroups(zoneMode,visualSimilarity);
+      state.variants=generateLayoutVariants(requested,direction,groupSame,groupLong,groupIdentical,groupVisual,zoneMode);
     }
     const variants=state.variants;
     let resultPack=pickVariation(variants,variation);
@@ -610,25 +735,25 @@
     $("arrangeMode").textContent=resultPack.mode==="original-fallback"?"目前位置":requested==="auto"?`自動：${strategyNames[resultPack.mode]||"最佳解"}`:strategyNames[requested];
     renderSource();renderResult();updateUI();
   }
-  function packLayout(mode,direction,groupSame,groupLong){
+  function packLayout(mode,direction,groupSame,groupLong,groupIdentical,groupVisual,zoneMode){
     const cols=state.grid.cols,rows=state.grid.rows;
     const usableCols=cols,usableRows=rows;
     const grid=Array.from({length:rows},()=>Array(cols).fill(false));
-    const ordered=sortBoxes(mode,groupSame,groupLong);
-    return packOrdered(ordered,mode,direction,grid,usableCols,usableRows);
+    const ordered=sortBoxes(mode,groupSame,groupLong,groupIdentical,groupVisual,zoneMode);
+    return packOrdered(ordered,mode,direction,grid,usableCols,usableRows,zoneMode);
   }
-  function packOrdered(ordered,mode,direction,grid,usableCols,usableRows){
+  function packOrdered(ordered,mode,direction,grid,usableCols,usableRows,zoneMode="none"){
     const layout=[],overflow=[];
     for(const box of ordered){
       const spots=findSpots(grid,box.gridW,box.gridH,direction);
       if(!spots.length){overflow.push(box);continue}
-      const spot=spots.sort((a,b)=>spotScore(a,box,grid,mode)-spotScore(b,box,grid,mode))[0];
+      const spot=spots.sort((a,b)=>spotScore(a,box,grid,mode,layout,zoneMode)-spotScore(b,box,grid,mode,layout,zoneMode))[0];
       fill(grid,spot.x,spot.y,box.gridW,box.gridH);
       layout.push({box,x:spot.x,y:spot.y,w:box.gridW,h:box.gridH});
     }
-    return{layout,overflow,mode,direction,score:scoreLayout(layout,overflow,grid,usableCols,usableRows)};
+    return{layout,overflow,mode,direction,zoneMode,score:scoreLayout(layout,overflow,grid,usableCols,usableRows,zoneMode)};
   }
-  function spotScore(spot,box,grid,mode){
+  function spotScore(spot,box,grid,mode,layout,zoneMode){
     if(mode==="move")return moveDistance(spot,box);
     let contacts=0;
     for(let x=spot.x;x<spot.x+box.gridW;x++){
@@ -639,9 +764,19 @@
       if(spot.x===0||grid[y][spot.x-1])contacts++;
       if(spot.x+box.gridW===grid[0].length||grid[y][spot.x+box.gridW])contacts++;
     }
-    return-contacts*1000+spot.y*grid[0].length+spot.x;
+    let zoneDistance=0;
+    if(zoneMode!=="none"){
+      const same=layout.filter(entry=>entry.box.zoneGroup===box.zoneGroup);
+      if(same.length){
+        zoneDistance=Math.min(...same.map(entry=>
+          Math.abs((spot.x+box.gridW/2)-(entry.x+entry.w/2))+
+          Math.abs((spot.y+box.gridH/2)-(entry.y+entry.h/2))
+        ));
+      }
+    }
+    return zoneDistance*5000-contacts*1000+spot.y*grid[0].length+spot.x;
   }
-  function generateLayoutVariants(requested,direction,groupSame,groupLong){
+  function generateLayoutVariants(requested,direction,groupSame,groupLong,groupIdentical,groupVisual,zoneMode){
     const cols=state.grid.cols,rows=state.grid.rows,variants=[],seen=new Set;
     const add=candidate=>{
       if(candidate.overflow.length)return;
@@ -657,20 +792,20 @@
       ?["compact","holes","large","small","tall","wide","same","long","move","original"]
       :[requested];
     const directions=requested==="auto"?["tl","tr","bl","br"]:[direction];
-    for(const mode of modes)for(const dir of directions)add(packLayout(mode,dir,groupSame,groupLong));
+    for(const mode of modes)for(const dir of directions)add(packLayout(mode,dir,groupSame,groupLong,groupIdentical,groupVisual,zoneMode));
     let seed=state.boxes.length*97+cols*31+rows*13+requested.length*19;
     const random=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296};
     for(let attempt=0;attempt<240;attempt++){
       const mode=modes[Math.floor(random()*modes.length)];
       const dir=directions[Math.floor(random()*directions.length)];
-      const ordered=sortBoxes(mode,groupSame,groupLong);
+      const ordered=sortBoxes(mode,groupSame,groupLong,groupIdentical,groupVisual,zoneMode);
       const swaps=1+Math.floor(random()*Math.max(1,Math.min(ordered.length,8)));
       for(let s=0;s<swaps;s++){
         const a=Math.floor(random()*ordered.length),b=Math.floor(random()*ordered.length);
         [ordered[a],ordered[b]]=[ordered[b],ordered[a]];
       }
       const grid=Array.from({length:rows},()=>Array(cols).fill(false));
-      add(packOrdered(ordered,mode,dir,grid,cols,rows));
+      add(packOrdered(ordered,mode,dir,grid,cols,rows,zoneMode));
     }
     if(!variants.length){
       const original=packOriginalLayout();
@@ -700,7 +835,7 @@
     }
     return{layout,overflow,mode:"original-fallback",direction:"tl",score:scoreLayout(layout,overflow,grid,cols,rows)-1};
   }
-  function sortBoxes(mode,groupSame,groupLong){
+  function sortBoxes(mode,groupSame,groupLong,groupIdentical,groupVisual,zoneMode){
     const index=box=>state.boxes.indexOf(box);
     const area=box=>box.gridW*box.gridH;
     const aspect=box=>Math.max(box.gridW/box.gridH,box.gridH/box.gridW);
@@ -717,6 +852,16 @@
       original:(a,b)=>index(a)-index(b)
     };
     return [...state.boxes].sort((a,b)=>{
+      if(zoneMode!=="none"){
+        const zoneDiff=(a.zoneGroup??9999)-(b.zoneGroup??9999);
+        if(zoneDiff)return zoneDiff;
+      }
+      if(groupIdentical||groupVisual){
+        const groupDiff=(a.visualGroup??9999)-(b.visualGroup??9999);
+        if(groupDiff)return groupDiff;
+        const visualRankDiff=(a.visualRank||0)-(b.visualRank||0);
+        if(Math.abs(visualRankDiff)>.001)return visualRankDiff;
+      }
       if(groupLong){
         const longDiff=(aspect(b)>=2?1:0)-(aspect(a)>=2?1:0);
         if(longDiff)return longDiff;
@@ -739,7 +884,7 @@
     return spots;
   }
   function moveDistance(spot,box){return Math.abs(spot.x-(box.gridX||0))+Math.abs(spot.y-(box.gridY||0))}
-  function scoreLayout(layout,overflow,grid,usableCols,usableRows){
+  function scoreLayout(layout,overflow,grid,usableCols,usableRows,zoneMode="none"){
     if(!layout.length)return overflow.length*1e9;
     const minX=Math.min(...layout.map(e=>e.x)),minY=Math.min(...layout.map(e=>e.y));
     const maxX=Math.max(...layout.map(e=>e.x+e.w)),maxY=Math.max(...layout.map(e=>e.y+e.h));
@@ -748,7 +893,22 @@
     const holes=Math.max(0,bounds-used);
     const movement=layout.reduce((sum,e)=>sum+moveDistance(e,e.box),0);
     const edgeWaste=usableCols*usableRows-used;
-    return overflow.length*1e9+holes*1e5+bounds*1e3+edgeWaste*10+movement;
+    let zoneSpread=0;
+    if(zoneMode!=="none"){
+      const groups=new Map();
+      layout.forEach(entry=>{
+        const key=entry.box.zoneGroup??-1;
+        if(!groups.has(key))groups.set(key,[]);
+        groups.get(key).push(entry);
+      });
+      for(const entries of groups.values()){
+        const gx1=Math.min(...entries.map(e=>e.x)),gy1=Math.min(...entries.map(e=>e.y));
+        const gx2=Math.max(...entries.map(e=>e.x+e.w)),gy2=Math.max(...entries.map(e=>e.y+e.h));
+        const groupArea=entries.reduce((sum,e)=>sum+e.w*e.h,0);
+        zoneSpread+=(gx2-gx1)*(gy2-gy1)-groupArea;
+      }
+    }
+    return overflow.length*1e9+zoneSpread*3e6+holes*1e5+bounds*1e3+edgeWaste*10+movement;
   }
   function directionName(value){return({tl:"左上",tr:"右上",bl:"左下",br:"右下"})[value]||"左上"}
   function canPlace(grid,x,y,w,h){
@@ -842,6 +1002,29 @@
       rctx.fillStyle="rgba(5,14,21,.82)";rctx.fillRect(x,y,labelW,Math.max(16,cell*.55));
       rctx.fillStyle="#f4fbfd";rctx.fillText(label,x+4,y+Math.max(12,cell*.42));
     });
+    if($("zoneMode").value!=="none"){
+      const groups=new Map();
+      state.layout.forEach(entry=>{
+        const key=entry.box.zoneGroup??-1;
+        if(!groups.has(key))groups.set(key,[]);
+        groups.get(key).push(entry);
+      });
+      let zoneIndex=0;
+      for(const entries of groups.values()){
+        if(entries.length<2)continue;
+        const x1=Math.min(...entries.map(e=>e.x))*cell+1;
+        const y1=Math.min(...entries.map(e=>e.y))*cell+1;
+        const x2=Math.max(...entries.map(e=>e.x+e.w))*cell+1;
+        const y2=Math.max(...entries.map(e=>e.y+e.h))*cell+1;
+        rctx.save();
+        rctx.strokeStyle=palette[zoneIndex%palette.length];
+        rctx.lineWidth=3;
+        rctx.setLineDash([7,4]);
+        rctx.strokeRect(x1+2,y1+2,x2-x1-4,y2-y1-4);
+        rctx.restore();
+        zoneIndex++;
+      }
+    }
   }
 
   function updateUI(){
